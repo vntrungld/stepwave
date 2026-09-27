@@ -73,7 +73,16 @@ impl Processor {
     }
 
     /// Process in place. Never allocates, locks or panics.
+    ///
+    /// Contract: `left` and `right` must have equal length. In a release build
+    /// (where the assert below is compiled out) a length mismatch is not an
+    /// error: only `min(left.len(), right.len())` samples are processed.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        debug_assert_eq!(
+            left.len(),
+            right.len(),
+            "left/right buffers must have equal length"
+        );
         let n = left.len().min(right.len());
         for (l, r) in left[..n].iter_mut().zip(right[..n].iter_mut()) {
             self.in_l[self.pos] = *l;
