@@ -50,6 +50,17 @@ def validate(model: BandMaskNet, batches: Batches, cfg: Config) -> tuple[float, 
     return loss_sum / max(clips, 1), 100.0 * boosted / max(inactive, 1)
 
 
+def _config_diff(a: dict[str, dict[str, object]], b: dict[str, dict[str, object]]) -> list[str]:
+    """Dotted `section.key` paths that differ between two config_to_dict() outputs."""
+    diffs = []
+    for section in sorted(set(a) | set(b)):
+        sa, sb = a.get(section, {}), b.get(section, {})
+        for key in sorted(set(sa) | set(sb)):
+            if sa.get(key) != sb.get(key):
+                diffs.append(f"{section}.{key}")
+    return diffs
+
+
 def _git_commit() -> str | None:
     try:
         out = subprocess.run(
@@ -91,6 +102,17 @@ def train(
             raise TrainerError(
                 "--resume: features changed since this run started (fingerprint mismatch); "
                 "start a new run directory"
+            )
+        new_dict = config_to_dict(cfg)
+        old_dict = {
+            **ck["config"],
+            "train": {**ck["config"]["train"], "epochs": new_dict["train"]["epochs"]},
+        }
+        diffs = _config_diff(old_dict, new_dict)
+        if diffs:
+            raise TrainerError(
+                f"--resume: config changed since this run started ({', '.join(diffs)}); "
+                "start a new run directory (extending train.epochs is the only allowed change)"
             )
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["optimizer"])

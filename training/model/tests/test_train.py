@@ -130,6 +130,24 @@ def test_resume_continues_and_checks_features(tmp_path: Path) -> None:
         train(feats, run, small_cfg(epochs=4), device="cpu", resume=True, log=quiet)
 
 
+def test_resume_rejects_changed_config(tmp_path: Path) -> None:
+    """--resume must only tolerate extending train.epochs; any other config change (e.g.
+    a different learning rate) since the run started must be rejected, naming the
+    differing key (Minor finding #7)."""
+    feats = prepped(tmp_path)
+    run = tmp_path / "run"
+    train(feats, run, small_cfg(epochs=2, early_stop_patience=99), device="cpu", log=quiet)
+    with pytest.raises(TrainerError, match="train.lr"):
+        train(
+            feats,
+            run,
+            small_cfg(epochs=3, early_stop_patience=99, lr=1e-2),
+            device="cpu",
+            resume=True,
+            log=quiet,
+        )
+
+
 def test_max_steps_and_nan_abort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     feats = prepped(tmp_path)
     train(feats, tmp_path / "a", small_cfg(), device="cpu", max_steps=2, log=quiet)
