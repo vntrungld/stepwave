@@ -1,0 +1,28 @@
+# Target mask (spec "Target"). strength_db must match profiles/cs2.json.
+[target]
+strength_db = 6.0
+gunfire_db = -6.0
+explosions_db = -6.0
+ambience_db = -3.0
+other_db = 0.0
+active_threshold_db = -25.0
+active_dilation_frames = 15
+gain_db_range = [-12.0, 12.0]
+
+[train]
+seq_frames = 400
+batch_size = 128
+epochs = 30
+lr = 1e-3
+weight_decay = 1e-4
+grad_clip = 1.0
+false_boost_weight = 4.0
+early_stop_patience = 5
+seed = 0
+
+[eval]
+false_boost_db = 2.0
+goal_footstep_gain_db = 4.0
+goal_snr_improvement_db = 6.0
+goal_false_boost_pct = 2.0
+listen_examples = 5
