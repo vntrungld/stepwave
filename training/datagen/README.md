@@ -28,7 +28,10 @@ datagen stats cs2               # sets/cs2/report/report.md; exit 1 on leaks/sum
 ```
 
 `mix` is resumable: re-run the same command after an interruption. The same name, split
-and `--seed` always reproduce the same bytes.
+and `--seed` always reproduce the same bytes. Each split records a fingerprint (config,
+catalog hash, seed and clip count) in `manifest.json` and every clip's `meta.json`; if a
+re-run's settings differ, `mix` refuses to continue. Pass `--force` to delete
+`sets/<name>/<split>/` and regenerate it, or use a new set name.
 
 ## Tuning
 
@@ -42,5 +45,6 @@ and `--seed` always reproduce the same bytes.
 (stereo, 48 kHz, 24-bit), plus `meta.json` describing every event. Stems sum to the mix.
 Features and target masks are computed at training time (M3) via `stepwave_py`.
 
-The `stats` report also shows measured mix RMS per class alongside the leak and
-stem-sum checks.
+The `stats` report plots the mean ERB band energy per class, the distribution of the
+measured mix RMS and the post-bus footstep SNR (`footstep_snr_db_final`, measured on the
+written stems), alongside the leak and stem-sum checks.
