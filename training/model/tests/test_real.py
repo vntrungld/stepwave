@@ -83,6 +83,21 @@ def test_loudness_match_avoids_clipping(tmp_path: Path) -> None:
     assert max(levels_db) - min(levels_db) < 0.1
 
 
+def test_real_recordings_skip_corrupt_file(tmp_path: Path) -> None:
+    """A corrupt real recording must be logged and skipped, not crash the whole real-eval
+    pass (Minor finding #5)."""
+    real = tmp_path / "real"
+    real.mkdir(parents=True)
+    (real / "corrupt.wav").write_bytes(b"not actually a wav file" * 10)
+    write(real / "noise.wav", np.random.default_rng(0).uniform(-0.1, 0.1, (SR, 2)))
+    logs: list[str] = []
+    results = evaluate_real(
+        plus_six, real, tmp_path / "out", np.zeros(32, np.float32), 2.0, logs.append
+    )
+    assert [r["name"] for r in results] == ["noise"]
+    assert any(line.startswith("skip corrupt.wav:") for line in logs)
+
+
 def test_evaluate_includes_real_section(tmp_path: Path) -> None:
     feats = prepped(tmp_path, {"train": 1, "val": 1}, seconds=1.0)
     write(tmp_path / "real/take1.wav", np.random.default_rng(1).uniform(-0.1, 0.1, (SR, 2)))

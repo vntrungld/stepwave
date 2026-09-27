@@ -281,28 +281,31 @@ def evaluate_real(
         return []
     results = []
     for path in sorted(p for p in real_dir.iterdir() if p.suffix.lower() in AUDIO_EXT):
-        info = sf.info(str(path))
-        if info.samplerate != SAMPLE_RATE or info.channels != 2:
-            log(
-                f"skip {path.name}: {info.samplerate} Hz, {info.channels} ch "
-                f"(need {SAMPLE_RATE} Hz stereo)"
-            )
-            continue
-        x = read_stereo(path)
-        if x.shape[1] < HOP:
-            log(f"skip {path.name}: shorter than one hop ({HOP} samples)")
-            continue
-        e = {"mix": sw.band_energies_db(x[0], x[1])}
-        gains = _mode_gains(e, gain_fn, eq_gains)
-        matched = loudness_match({mode: render(x, gains[mode]) for mode in MODES})
-        for mode in MODES:
-            write_flac(out_dir / "real" / f"{path.stem}_{mode}.flac", matched[mode])
-        smooth = sw.smooth_gains_db(gains["model"])
-        seconds = x.shape[1] / SAMPLE_RATE
-        _heatmap(smooth, seconds, out_dir / "real" / f"{path.stem}_gains.png")
-        boost_pct = float(100.0 * np.mean(smooth.max(axis=1) > false_boost_db))
-        results.append({"name": path.stem, "seconds": seconds, "boost_pct": boost_pct})
-        log(f"real {path.name}: model boosting {boost_pct:.1f}% of the time")
+        try:
+            info = sf.info(str(path))
+            if info.samplerate != SAMPLE_RATE or info.channels != 2:
+                log(
+                    f"skip {path.name}: {info.samplerate} Hz, {info.channels} ch "
+                    f"(need {SAMPLE_RATE} Hz stereo)"
+                )
+                continue
+            x = read_stereo(path)
+            if x.shape[1] < HOP:
+                log(f"skip {path.name}: shorter than one hop ({HOP} samples)")
+                continue
+            e = {"mix": sw.band_energies_db(x[0], x[1])}
+            gains = _mode_gains(e, gain_fn, eq_gains)
+            matched = loudness_match({mode: render(x, gains[mode]) for mode in MODES})
+            for mode in MODES:
+                write_flac(out_dir / "real" / f"{path.stem}_{mode}.flac", matched[mode])
+            smooth = sw.smooth_gains_db(gains["model"])
+            seconds = x.shape[1] / SAMPLE_RATE
+            _heatmap(smooth, seconds, out_dir / "real" / f"{path.stem}_gains.png")
+            boost_pct = float(100.0 * np.mean(smooth.max(axis=1) > false_boost_db))
+            results.append({"name": path.stem, "seconds": seconds, "boost_pct": boost_pct})
+            log(f"real {path.name}: model boosting {boost_pct:.1f}% of the time")
+        except Exception as err:  # noqa: BLE001 - one bad real recording must not sink the rest
+            log(f"skip {path.name}: {err}")
     return results
 
 
@@ -371,6 +374,24 @@ def _report(
     return "\n".join(lines)
 
 
+def _write_results(
+    out_dir: Path,
+    metrics: dict[str, dict[str, float | None]],
+    real: list[dict[str, Any]],
+    cfg: Config,
+    label: str,
+    n_clips: int,
+    frames: int,
+    active_pct: float,
+    listen: int,
+) -> None:
+    (out_dir / "metrics.json").write_text(
+        json.dumps({**metrics, "real": real}, indent=2, sort_keys=True)
+    )
+    report = _report(metrics, cfg, label, n_clips, frames, active_pct, listen)
+    (out_dir / "report.md").write_text(report + "\n" + _real_section(real))
+
+
 def evaluate(
     gain_fn: GainFn,
     features_dir: Path,
@@ -410,15 +431,14 @@ def evaluate(
     _plots(acc, out_dir)
     inactive = acc["fb"][0, 1]
     active_pct = 100.0 * (1.0 - inactive / max(split.frames, 1))
+    # Written before the real recordings so a finished synthetic eval is never lost if
+    # something in evaluate_real (or filesystem I/O around it) still goes wrong.
+    _write_results(out_dir, metrics, [], cfg, label, n_clips, split.frames, active_pct, listen)
     real = (
         evaluate_real(gain_fn, real_dir, out_dir, eq_gains, cfg.eval.false_boost_db, log)
         if real_dir is not None
         else []
     )
-    (out_dir / "metrics.json").write_text(
-        json.dumps({**metrics, "real": real}, indent=2, sort_keys=True)
-    )
-    report = _report(metrics, cfg, label, n_clips, split.frames, active_pct, listen)
-    (out_dir / "report.md").write_text(report + "\n" + _real_section(real))
+    _write_results(out_dir, metrics, real, cfg, label, n_clips, split.frames, active_pct, listen)
     log(f"report: {out_dir / 'report.md'}")
     return {**metrics, "real": real}

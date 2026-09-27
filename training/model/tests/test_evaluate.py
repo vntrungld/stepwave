@@ -10,6 +10,7 @@ import pytest
 import torch
 from typer.testing import CliRunner
 
+import stepwave_model.evaluate as evaluate_mod
 from helpers import CONFIG_PATH, PROFILE, prepped, write_run
 from stepwave_model import STEMS
 from stepwave_model.cli import _eval_target, app
@@ -140,6 +141,35 @@ def test_model_gains_is_picklable_and_shaped(tmp_path: Path) -> None:
     g = fn(e)
     assert g.shape == (e["mix"].shape[0], 32) and g.dtype == np.float32
     assert np.all(np.abs(g) <= 12.0)
+
+
+def test_synthetic_results_survive_a_broken_real_eval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A finished synthetic eval must not be thrown away by a later failure while
+    processing real recordings (evaluate.py:403-412, Minor finding #5)."""
+    feats = prepped(tmp_path, {"train": 1, "val": 1}, seconds=1.0)
+    cfg = load_config(CONFIG_PATH)
+    out = tmp_path / "eval"
+
+    def boom(*_a: object, **_k: object) -> list[dict[str, object]]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(evaluate_mod, "evaluate_real", boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        evaluate(
+            stub_gains,
+            feats,
+            tmp_path / "sets/t",
+            out,
+            cfg,
+            PROFILE,
+            real_dir=tmp_path / "real",
+            log=quiet,
+        )
+    assert (out / "metrics.json").is_file()
+    assert (out / "report.md").is_file()
+    assert json.loads((out / "metrics.json").read_text())["real"] == []
 
 
 def test_export_writes_target_header(tmp_path: Path) -> None:
