@@ -51,12 +51,24 @@ def _rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.asarray(x, np.float64) ** 2)))
 
 
-def loudness_match(y: np.ndarray, ref: np.ndarray) -> np.ndarray:
-    """Scale y to ref's RMS (fair A/B listening); silence is returned unchanged."""
-    ry, rr = _rms(y), _rms(ref)
-    if ry == 0.0 or rr == 0.0:
-        return y
-    return np.clip(y * (rr / ry), -1.0, 1.0).astype(np.float32)
+def loudness_match(renders: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Scale every render to the lowest RMS among them (fair A/B listening).
+
+    Each render already passed through the limiter at <= -1 dBFS peak, so a quieter
+    render (e.g. a static-EQ curve that cuts overall level but barely touches its own
+    least-attenuated band) can have a much higher crest factor than a louder one;
+    matching *up* to the loudest render's RMS can then push its peak past +-1.0. Only
+    ever attenuating avoids that: every render's peak can only shrink. Renders that are
+    pure silence (RMS 0) are returned unchanged."""
+    rms = {k: _rms(v) for k, v in renders.items()}
+    positive = [r for r in rms.values() if r > 0.0]
+    if not positive:
+        return dict(renders)
+    target = min(positive)
+    return {
+        k: (v if rms[k] == 0.0 else (v * (target / rms[k])).astype(np.float32))
+        for k, v in renders.items()
+    }
 
 
 def write_flac(path: Path, x: np.ndarray) -> None:
@@ -282,10 +294,9 @@ def evaluate_real(
             continue
         e = {"mix": sw.band_energies_db(x[0], x[1])}
         gains = _mode_gains(e, gain_fn, eq_gains)
-        off = render(x, gains["off"])
+        matched = loudness_match({mode: render(x, gains[mode]) for mode in MODES})
         for mode in MODES:
-            y = off if mode == "off" else loudness_match(render(x, gains[mode]), off)
-            write_flac(out_dir / "real" / f"{path.stem}_{mode}.flac", y)
+            write_flac(out_dir / "real" / f"{path.stem}_{mode}.flac", matched[mode])
         smooth = sw.smooth_gains_db(gains["model"])
         seconds = x.shape[1] / SAMPLE_RATE
         _heatmap(smooth, seconds, out_dir / "real" / f"{path.stem}_gains.png")
@@ -354,7 +365,7 @@ def _report(
         "![gain histogram](gain_hist.png)",
         "",
         f"Listening examples: `val_00..{listen - 1:02d}_{{off,eq,model}}.flac` "
-        "(limiter on, loudness-matched to off).",
+        "(limiter on, loudness-matched to the quietest of the three).",
         "",
     ]
     return "\n".join(lines)
@@ -393,10 +404,9 @@ def evaluate(
     ):
         mix = read_stereo(clip_dir / "mix.flac")
         gains = _mode_gains(e, gain_fn, eq_gains)
-        off = render(mix, gains["off"])
+        matched = loudness_match({mode: render(mix, gains[mode]) for mode in MODES})
         for mode in MODES:
-            y = off if mode == "off" else loudness_match(render(mix, gains[mode]), off)
-            write_flac(out_dir / f"val_{i:02d}_{mode}.flac", y)
+            write_flac(out_dir / f"val_{i:02d}_{mode}.flac", matched[mode])
     _plots(acc, out_dir)
     inactive = acc["fb"][0, 1]
     active_pct = 100.0 * (1.0 - inactive / max(split.frames, 1))
