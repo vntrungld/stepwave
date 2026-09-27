@@ -73,7 +73,7 @@ def compute_stats(
     clips = _clip_dirs(set_dir)
     leaks: list[str] = []
     sum_failures: list[str] = []
-    snr, dist, az, loud, out_rms = [], [], [], [], []
+    snr, snr_final, dist, az, loud, out_rms = [], [], [], [], [], []
     surfaces: Counter[str] = Counter()
     maps: Counter[str] = Counter()
     with_steps = 0
@@ -94,6 +94,8 @@ def compute_stats(
         if meta["footstep_snr_db"] is not None:
             with_steps += 1
             snr.append(meta["footstep_snr_db"])
+        if meta.get("footstep_snr_db_final") is not None:
+            snr_final.append(meta["footstep_snr_db_final"])
         loud.append(meta["loudness_rms_dbfs"])
         measured = _mix_rms_dbfs(mix)
         if measured is not None:
@@ -117,6 +119,7 @@ def compute_stats(
                     energy_n[c] += 1
 
     _hist(snr, "footstep SNR (dB, pre-bus)", report_dir / "snr.png")
+    _hist(snr_final, "footstep SNR (dB, post-bus, as written)", report_dir / "snr_final.png")
     _hist(dist, "source distance (m)", report_dir / "distance.png")
     _hist(az, "azimuth (deg)", report_dir / "azimuth.png", bins=36)
     _hist(loud, "loudness target (dBFS RMS)", report_dir / "loudness.png")
@@ -179,7 +182,8 @@ def compute_stats(
         "",
         "## Plots",
         "",
-        "![snr](snr.png) ![distance](distance.png) ![azimuth](azimuth.png) "
+        "![snr](snr.png) ![snr final](snr_final.png) ![distance](distance.png) "
+        "![azimuth](azimuth.png) "
         "![loudness](loudness.png) ![output rms](output_rms.png)",
         "",
         "![band energy per class](band_energy.png)",

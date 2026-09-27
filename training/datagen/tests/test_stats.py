@@ -31,6 +31,8 @@ def test_clean_set_reports_without_problems(tmp_path: Path) -> None:
     assert (set_dir / "report/snr.png").is_file()
     assert (set_dir / "report/band_energy.png").is_file()
     assert (set_dir / "report/output_rms.png").is_file()
+    assert (set_dir / "report/snr_final.png").is_file()
+    assert "(snr_final.png)" in text
     assert "Measured mix RMS" in text
     listen = sorted((set_dir / "report").glob("listen_*.flac"))
     assert len(listen) == 2

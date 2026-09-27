@@ -15,6 +15,7 @@ from stepwave_datagen.cli import app
 from stepwave_datagen.errors import DatagenError
 from stepwave_datagen.generate import AudioLoader, generate, make_clip
 from stepwave_datagen.hrtf import load_sofa
+from stepwave_datagen.render import active_rms
 from stepwave_datagen.scene import make_pools
 from stepwave_datagen.writer import is_complete, read_clip
 
@@ -67,6 +68,22 @@ def test_generate_writes_valid_clips(tiny) -> None:
     for clip in clips:
         assert json.loads((clip / "meta.json").read_text())["fingerprint"] == split["fingerprint"]
     assert len(manifest["catalog_sha256"]) == 64
+
+
+def test_meta_records_post_bus_footstep_snr(tiny) -> None:
+    data, cfg = tiny
+    generate(data, "s", "train", 20 * 2.0 / 3600, 1, cfg, workers=1)
+    seen = 0
+    for clip in sorted((data / "sets/s/train").iterdir()):
+        _, stems, meta = read_clip(clip)
+        if meta["footstep_snr_db"] is None:
+            assert meta["footstep_snr_db_final"] is None
+            continue
+        seen += 1
+        rest = sum(stems[c] for c in CLASSES if c != "footsteps")
+        measured = 20 * np.log10(active_rms(stems["footsteps"]) / active_rms(rest))
+        assert abs(meta["footstep_snr_db_final"] - measured) < 0.5
+    assert seen > 0
 
 
 def test_generate_is_byte_identical_across_runs(tiny, tmp_path: Path) -> None:

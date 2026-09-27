@@ -22,7 +22,7 @@ from .catalog import catalog_sha256, processed_path, read_catalog
 from .config import Config, config_to_dict
 from .errors import DatagenError
 from .hrtf import Hrtf, load_sofa
-from .render import render_stems
+from .render import active_rms, render_stems
 from .scene import Pools, clip_id, clip_seed, make_pools, sample_scene
 from .writer import is_complete, write_clip
 
@@ -69,9 +69,26 @@ def make_clip(
     meta = dataclasses.asdict(scene)
     meta.update(bus_info)
     meta.update(
-        {"set": set_name, "split": split, "footstep_snr_db_definition": "pre-bus active RMS ratio"}
+        {
+            "set": set_name,
+            "split": split,
+            "footstep_snr_db_definition": "pre-bus active RMS ratio",
+            "footstep_snr_db_final": _final_snr_db(stems, scene.footstep_snr_db),
+            "footstep_snr_db_final_definition": "post-bus active RMS ratio of the written stems",
+        }
     )
     return mix, stems, meta
+
+
+def _final_snr_db(stems: dict[str, np.ndarray], target: float | None) -> float | None:
+    """Footsteps vs everything else in the stems as written (same active-RMS definition)."""
+    if target is None:
+        return None
+    steps = active_rms(stems["footsteps"])
+    rest = active_rms(sum(stems[c] for c in stems if c != "footsteps"))
+    if steps == 0.0 or rest == 0.0:
+        return None
+    return float(20.0 * np.log10(steps / rest))
 
 
 _STATE: dict[str, Any] = {}
