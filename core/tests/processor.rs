@@ -131,3 +131,56 @@ fn non_finite_mask_falls_back_to_unity() {
     assert!(out.0.iter().all(|v| v.is_finite()));
     assert_eq!(out, run(&mut unity(), &x, &x, 480));
 }
+
+struct HugeMask;
+
+impl MaskSource for HugeMask {
+    fn next_mask(&mut self, _: &[Complex32], gains_db: &mut [f32; NUM_BANDS]) {
+        gains_db.fill(1.0e4);
+    }
+}
+
+#[test]
+fn huge_finite_mask_is_clamped_and_stays_finite() {
+    let x = white_noise(9, 9_600, 0.3);
+    let mut huge = Processor::with_mask(Box::new(HugeMask), 48_000).unwrap();
+    let (l, r) = run(&mut huge, &x, &x, 480);
+    assert!(
+        l.iter().chain(&r).all(|v| v.is_finite()),
+        "huge mask must not overflow to inf/NaN"
+    );
+    assert!(peak(&l) <= CEILING && peak(&r) <= CEILING);
+}
+
+#[test]
+fn nan_input_sample_stays_finite_and_output_resyncs_with_clean_run() {
+    let len = 9_600;
+    let clean = white_noise(13, len, 0.3);
+    let mut dirty = clean.clone();
+    dirty[100] = f32::NAN;
+
+    let (out_clean, _) = run(&mut unity(), &clean, &clean, 480);
+    let (out_dirty, _) = run(&mut unity(), &dirty, &dirty, 480);
+
+    assert!(
+        out_dirty.iter().all(|v| v.is_finite()),
+        "a single bad input sample must never leave non-finite output"
+    );
+
+    // A single NaN sample poisons every FFT bin of any analysis frame whose
+    // 960-sample (WIN) window still contains it -- at most 2 consecutive hops
+    // (WIN = 2*HOP) -- and, because the overlap-add accumulator is zero-filled
+    // each time a hop is read out, one further hop is needed for a subsequent
+    // clean frame's contribution to land on a fully-reset slot and resynchronise
+    // bit-for-bit with a run that never saw the bad sample. So at most ~3 hops
+    // (1440 samples) around the injection point can differ; we compare the last
+    // 4_800 samples (10 hops), a comfortable margin past that settling window.
+    let tail = len - 4_800;
+    for (i, (d, c)) in out_dirty[tail..].iter().zip(&out_clean[tail..]).enumerate() {
+        assert!(
+            (d - c).abs() < 1e-6,
+            "sample {} diverged from clean run: dirty={d} clean={c}",
+            tail + i
+        );
+    }
+}

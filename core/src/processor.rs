@@ -9,6 +9,13 @@ use crate::smoother::GainSmoother;
 use crate::stft::{Complex32, StftChannel, BINS, HOP, SAMPLE_RATE, WIN};
 use crate::{CoreError, Profile};
 
+/// Lower bound for a per-band mask value, in dB, after which it is clamped.
+/// Guards against a finite-but-huge mask overflowing `10f32.powf(db / 20.0)`
+/// to +-inf/NaN after clamping and smoothing.
+pub const MIN_MASK_DB: f32 = -60.0;
+/// Upper bound for a per-band mask value, in dB, after which it is clamped.
+pub const MAX_MASK_DB: f32 = 24.0;
+
 pub struct Processor {
     left: StftChannel,
     right: StftChannel,
@@ -110,6 +117,12 @@ impl Processor {
 
         self.mask.next_mask(&self.mid, &mut self.raw_db);
         if self.raw_db.iter().all(|g| g.is_finite()) {
+            // A finite but huge mask value (e.g. a runaway model output) would
+            // otherwise overflow `10f32.powf(db / 20.0)` to inf below, and the
+            // smoother would then hold that inf/NaN state for its release time.
+            for d in self.raw_db.iter_mut() {
+                *d = d.clamp(MIN_MASK_DB, MAX_MASK_DB);
+            }
             self.smoother.process(&self.raw_db, &mut self.smooth_db);
             self.bands.interpolate_db(&self.smooth_db, &mut self.bin_db);
             for (g, &d) in self.bin_gain.iter_mut().zip(&self.bin_db) {
