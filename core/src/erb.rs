@@ -1,6 +1,6 @@
 //! 32 bands spaced uniformly on the ERB-rate scale, and interpolation of band gains to FFT bins.
 
-use crate::stft::{BINS, BIN_HZ};
+use crate::stft::{Complex32, BINS, BIN_HZ};
 
 pub const NUM_BANDS: usize = 32;
 pub const MIN_HZ: f32 = 50.0;
@@ -47,6 +47,23 @@ impl ErbBands {
     pub fn interpolate_db(&self, band_db: &[f32; NUM_BANDS], bin_db: &mut [f32]) {
         for (out, &(i, w)) in bin_db.iter_mut().zip(&self.interp) {
             *out = band_db[i] * (1.0 - w) + band_db[i + 1] * w;
+        }
+    }
+
+    /// Power per band in dB: the transpose of `interpolate_db`. Each bin's power goes to its
+    /// two neighbouring bands with the same weights, normalised by each band's total weight.
+    pub fn band_energies_db(&self, spectrum: &[Complex32], out: &mut [f32; NUM_BANDS]) {
+        let mut power = [0.0f32; NUM_BANDS];
+        let mut weight = [0.0f32; NUM_BANDS];
+        for (x, &(i, w)) in spectrum.iter().zip(&self.interp) {
+            let p = x.norm_sqr();
+            power[i] += p * (1.0 - w);
+            weight[i] += 1.0 - w;
+            power[i + 1] += p * w;
+            weight[i + 1] += w;
+        }
+        for ((o, p), wt) in out.iter_mut().zip(power).zip(weight) {
+            *o = 10.0 * (p / wt.max(1e-12) + 1e-10).log10();
         }
     }
 }
@@ -98,5 +115,40 @@ mod tests {
         assert!(bins.windows(2).all(|w| w[1] >= w[0]));
         assert_eq!(bins[0], 0.0); // 0 Hz is below the first centre
         assert_eq!(bins[BINS - 1], (NUM_BANDS - 1) as f32); // 24 kHz is above the last
+    }
+
+    use crate::stft::{Complex32, BINS, BIN_HZ};
+
+    #[test]
+    fn band_energy_peaks_at_band_nearest_a_bin_tone() {
+        let bands = ErbBands::new();
+        let k = 20; // 1000 Hz
+        let mut spectrum = [Complex32::new(0.0, 0.0); BINS];
+        spectrum[k] = Complex32::new(100.0, 0.0);
+        let mut out = [0.0; NUM_BANDS];
+        bands.band_energies_db(&spectrum, &mut out);
+        let hz = k as f32 * BIN_HZ;
+        let nearest = bands
+            .centres_hz()
+            .iter()
+            .enumerate()
+            .min_by(|a, b| (a.1 - hz).abs().total_cmp(&(b.1 - hz).abs()))
+            .map(|(i, _)| i)
+            .unwrap();
+        let loudest = out
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i)
+            .unwrap();
+        assert_eq!(loudest, nearest);
+    }
+
+    #[test]
+    fn band_energy_of_silence_is_finite_floor() {
+        let bands = ErbBands::new();
+        let mut out = [0.0; NUM_BANDS];
+        bands.band_energies_db(&[Complex32::new(0.0, 0.0); BINS], &mut out);
+        assert!(out.iter().all(|v| (*v + 100.0).abs() < 1e-3));
     }
 }
