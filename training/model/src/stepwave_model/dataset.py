@@ -43,20 +43,25 @@ class Batches:
 
     def window(self, rng: np.random.Generator, batch: int, seq: int) -> Batch:
         """Random `seq`-frame windows. One extra leading frame is read so the first delta
-        is real, then dropped."""
+        is real, plus `active_dilation_frames` extra frames on each side so a footstep just
+        outside the window still widens activity at the window's edges the same way it would
+        in the full-clip computation; the extra context is cropped off afterwards."""
+        d = self.cfg.active_dilation_frames
+        read = seq + 1 + 2 * d
         offsets, counts = self.split.index[:, 0], self.split.index[:, 1]
-        eligible = np.flatnonzero(counts >= seq + 1)
+        eligible = np.flatnonzero(counts >= read)
         if eligible.size == 0:
             raise TrainerError(
-                f"no clip has {seq + 1} frames (longest {int(counts.max())}); "
+                f"no clip has {read} frames (longest {int(counts.max())}); "
                 "lower train.seq_frames"
             )
         pick = rng.choice(eligible, size=batch)
-        starts = offsets[pick] + (rng.random(batch) * (counts[pick] - seq)).astype(np.int64)
-        rows = (starts[:, None] + np.arange(seq + 1)).ravel()
-        e = {s: self.split.energies[s][rows].reshape(batch, seq + 1, NUM_BANDS) for s in SIGNALS}
+        starts = offsets[pick] + (rng.random(batch) * (counts[pick] - read + 1)).astype(np.int64)
+        rows = (starts[:, None] + np.arange(read)).ravel()
+        e = {s: self.split.energies[s][rows].reshape(batch, read, NUM_BANDS) for s in SIGNALS}
         x, target, active = self._prepare(e)
-        return x[:, 1:], target[:, 1:], active[:, 1:]
+        crop = slice(1 + d, 1 + d + seq)
+        return x[:, crop], target[:, crop], active[:, crop]
 
     def clips(self, max_batch: int = 32) -> Iterator[Batch]:
         """Every clip in full, batched by equal length."""
