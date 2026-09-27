@@ -60,3 +60,16 @@ def make_set(
         splits[split] = {"fingerprint": fingerprints.get(split, f"fp-{split}")}
     (root / "manifest.json").write_text(json.dumps({"splits": splits}))
     return root
+
+
+def prepped(tmp_path: Path, clips: dict[str, int] | None = None, seconds: float = 4.5) -> Path:
+    """A tiny synthetic set run through prep; returns the features directory.
+
+    4.5 s (450 frames) so a default `train.seq_frames = 400` clip is long enough for at
+    least one window (needs seq_frames + 1 frames); tests that need shorter clips pass
+    `seconds` explicitly.
+    """
+    from stepwave_model.prep import prep_set
+
+    make_set(tmp_path, "t", clips or {"train": 4, "val": 2}, seconds=seconds)
+    return prep_set(tmp_path, "t", log=lambda _: None)

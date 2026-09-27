@@ -56,3 +56,22 @@ def prep(
 
     path = run(lambda: prep_set(data_dir, set_name, out, workers, force, log=typer.echo))
     typer.echo(f"features: {path}")
+
+
+@app.command("train")
+def train_cmd(
+    features: Path = typer.Argument(..., help="features dir from `trainer prep`"),
+    out: Path = typer.Option(..., help="run directory (checkpoints, logs)"),
+    config: Path = typer.Option(CONFIG),
+    device: str = typer.Option("auto", help="auto, cpu or cuda"),
+    resume: bool = typer.Option(False, "--resume", help="continue from <out>/last.pt"),
+    max_steps: int | None = typer.Option(None, help="stop after this many steps (smoke tests)"),
+) -> None:
+    """Train BandMaskNet; writes best.pt, last.pt, train.json and log.csv."""
+    from .config import load_config
+    from .train import train
+
+    def body() -> Path:
+        return train(features, out, load_config(config), device, resume, max_steps, typer.echo)
+
+    typer.echo(f"best checkpoint: {run(body)}")
