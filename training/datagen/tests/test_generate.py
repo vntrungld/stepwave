@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -53,7 +54,15 @@ def test_generate_writes_valid_clips(tiny) -> None:
         assert np.abs(mix).max() <= 10 ** (-1 / 20)
         assert meta["clip_id"] == clip.name
     manifest = json.loads((data / "sets/s/manifest.json").read_text())
-    assert manifest["splits"]["train"] == {"clips": 5, "hours": HOURS_5_CLIPS, "seed": 1}
+    split = manifest["splits"]["train"]
+    assert {k: split[k] for k in ("clips", "hours", "seed")} == {
+        "clips": 5,
+        "hours": HOURS_5_CLIPS,
+        "seed": 1,
+    }
+    assert len(split["fingerprint"]) == 64
+    for clip in clips:
+        assert json.loads((clip / "meta.json").read_text())["fingerprint"] == split["fingerprint"]
     assert len(manifest["catalog_sha256"]) == 64
 
 
@@ -85,6 +94,49 @@ def test_rerun_skips_complete_clips(tiny) -> None:
     generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)
     again = generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)
     assert (again.written, again.skipped) == (0, 5)
+
+
+def _other_cfg(cfg):
+    return dataclasses.replace(cfg, scene=dataclasses.replace(cfg.scene, footstep_probability=0.5))
+
+
+def test_changed_config_refuses_to_resume(tiny) -> None:
+    data, cfg = tiny
+    generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)
+    with pytest.raises(DatagenError, match="--force"):
+        generate(data, "s", "train", HOURS_5_CLIPS, 1, _other_cfg(cfg), workers=1)
+
+
+@pytest.mark.parametrize("seed, hours", [(2, HOURS_5_CLIPS), (1, 3 * 2.0 / 3600)])
+def test_changed_seed_or_hours_refuses_to_resume(tiny, seed: int, hours: float) -> None:
+    data, cfg = tiny
+    generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)
+    with pytest.raises(DatagenError, match="new set name"):
+        generate(data, "s", "train", hours, seed, cfg, workers=1)
+
+
+def test_interrupted_run_without_manifest_still_detects_drift(tiny) -> None:
+    data, cfg = tiny
+    generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)
+    (data / "sets/s/manifest.json").unlink()
+    with pytest.raises(DatagenError, match="--force"):
+        generate(data, "s", "train", HOURS_5_CLIPS, 1, _other_cfg(cfg), workers=1)
+
+
+def test_force_regenerates_split(tiny) -> None:
+    data, cfg = tiny
+    generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)
+    generate(data, "s", "val", HOURS_5_CLIPS, 1, cfg, workers=1)
+    stray = data / "sets/s/train/train-000099"
+    stray.mkdir()
+    again = generate(data, "s", "train", HOURS_5_CLIPS, 1, _other_cfg(cfg), workers=1, force=True)
+    assert (again.written, again.skipped) == (5, 0)
+    assert not stray.exists()
+    manifest = json.loads((data / "sets/s/manifest.json").read_text())
+    fp = manifest["splits"]["train"]["fingerprint"]
+    for clip in (data / "sets/s/train").iterdir():
+        assert json.loads((clip / "meta.json").read_text())["fingerprint"] == fp
+    assert is_complete(data / "sets/s/val/val-000000")  # other split untouched
 
 
 def test_partial_clip_is_regenerated(tiny) -> None:
@@ -141,3 +193,10 @@ def test_mix_command(tiny, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert len(list((data / "sets/cli/train").iterdir())) == 5
+    args = ["mix", "cli", "--hours", str(HOURS_5_CLIPS), "--workers", "1"]
+    args += ["--data-dir", str(data), "--config", str(cfg_file), "--seed", "2"]
+    refused = CliRunner().invoke(app, args)
+    assert refused.exit_code == 1
+    forced = CliRunner().invoke(app, [*args, "--force"])
+    assert forced.exit_code == 0, forced.output
+    assert "written 5" in forced.output

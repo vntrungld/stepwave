@@ -118,6 +118,9 @@ def mix(
     hours: float | None = typer.Option(None, help="default: config split.<split>_hours"),
     seed: int = typer.Option(1),
     workers: int | None = typer.Option(None, help="processes (default: all cores)"),
+    force: bool = typer.Option(
+        False, "--force", help="delete sets/<name>/<split>/ first (needed after changing settings)"
+    ),
     data_dir: Path = typer.Option(DATA_DIR),
     config: Path = typer.Option(CONFIG),
 ) -> None:
@@ -132,7 +135,9 @@ def mix(
         h = hours if hours is not None else getattr(cfg.split, f"{split}_hours", None)
         if h is None:
             raise DatagenError(f"unknown split {split!r}; expected 'train' or 'val'")
-        result = generate(data_dir, name, split, h, seed, cfg, workers or os.cpu_count() or 1)
+        result = generate(
+            data_dir, name, split, h, seed, cfg, workers or os.cpu_count() or 1, force=force
+        )
         typer.echo(
             f"written {result.written}, skipped {result.skipped}, failed {len(result.failed)}"
         )

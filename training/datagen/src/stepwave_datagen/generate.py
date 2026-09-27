@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
+import shutil
 import subprocess
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
@@ -74,7 +76,40 @@ def make_clip(
 _STATE: dict[str, Any] = {}
 
 
-def _init(data_dir: Path, cfg: Config, split: str, set_name: str, set_seed: int) -> None:
+def split_fingerprint(cfg: Config, catalog_sha: str, seed: int, clips: int) -> str:
+    """Identity of everything that determines a split's clips (the set name aside)."""
+    payload = {
+        "config": config_to_dict(cfg),
+        "catalog_sha256": catalog_sha,
+        "seed": seed,
+        "clips": clips,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _check_fingerprint(data_dir: Path, name: str, split: str, fingerprint: str) -> None:
+    """Refuse to resume a split that was started with different settings."""
+    out = data_dir / "sets" / name / split
+    manifest = data_dir / "sets" / name / "manifest.json"
+    found: set[str | None] = set()
+    if manifest.is_file():
+        entry = json.loads(manifest.read_text()).get("splits", {}).get(split)
+        if entry is not None:
+            found.add(entry.get("fingerprint"))
+    if out.is_dir():
+        for meta in out.glob("*/meta.json"):
+            found.add(json.loads(meta.read_text()).get("fingerprint"))
+    if found - {fingerprint}:
+        raise DatagenError(
+            f"sets/{name}/{split} was generated with different settings (config, catalog, "
+            f"seed or hours); re-run with --force to delete and regenerate that split, "
+            f"or use a new set name"
+        )
+
+
+def _init(
+    data_dir: Path, cfg: Config, split: str, set_name: str, set_seed: int, fingerprint: str
+) -> None:
     entries = read_catalog(data_dir / "catalog.csv")
     _STATE.update(
         pools=make_pools(entries, split, cfg.split.holdout_maps, cfg.split.holdout_surfaces),
@@ -84,6 +119,7 @@ def _init(data_dir: Path, cfg: Config, split: str, set_name: str, set_seed: int)
         split=split,
         set_name=set_name,
         set_seed=set_seed,
+        fingerprint=fingerprint,
         out=data_dir / "sets" / set_name / split,
     )
 
@@ -96,6 +132,7 @@ def _work(index: int) -> tuple[str, str | None]:
         mix, stems, meta = make_clip(
             s["pools"], s["load"], s["hrtf"], s["cfg"], seed, cid, s["split"], s["set_name"]
         )
+        meta["fingerprint"] = s["fingerprint"]
         write_clip(s["out"] / cid, mix, stems, meta)
         return cid, None
     except Exception as err:  # noqa: BLE001 - report per clip, keep going
@@ -113,21 +150,42 @@ def _git_commit() -> str:
 
 
 def _write_manifest(
-    data_dir: Path, name: str, split: str, clips: int, hours: float, seed: int, cfg: Config
+    data_dir: Path,
+    name: str,
+    split: str,
+    clips: int,
+    hours: float,
+    seed: int,
+    cfg: Config,
+    fingerprint: str,
 ) -> None:
     path = data_dir / "sets" / name / "manifest.json"
     manifest = json.loads(path.read_text()) if path.is_file() else {"splits": {}}
     manifest["config"] = config_to_dict(cfg)
     manifest["catalog_sha256"] = catalog_sha256(data_dir / "catalog.csv")
     manifest["git_commit"] = _git_commit()
-    manifest["splits"][split] = {"clips": clips, "hours": hours, "seed": seed}
+    manifest["splits"][split] = {
+        "clips": clips,
+        "hours": hours,
+        "seed": seed,
+        "fingerprint": fingerprint,
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
 
 
 def generate(
-    data_dir: Path, name: str, split: str, hours: float, seed: int, cfg: Config, workers: int
+    data_dir: Path,
+    name: str,
+    split: str,
+    hours: float,
+    seed: int,
+    cfg: Config,
+    workers: int,
+    force: bool = False,
 ) -> GenerateResult:
+    """Generate one split. Resumes an interrupted run with the same settings; refuses
+    one whose fingerprint differs unless `force` deletes the split first."""
     catalog = data_dir / "catalog.csv"
     if not catalog.is_file():
         raise DatagenError(f"{catalog} not found; run `datagen catalog` first")
@@ -137,10 +195,15 @@ def generate(
     make_pools(read_catalog(catalog), split, cfg.split.holdout_maps, cfg.split.holdout_surfaces)
 
     clips = max(1, round(hours * 3600 / cfg.scene.clip_seconds))
+    fingerprint = split_fingerprint(cfg, catalog_sha256(catalog), seed, clips)
     out = data_dir / "sets" / name / split
+    if force and out.exists():
+        shutil.rmtree(out)
+    if not force:
+        _check_fingerprint(data_dir, name, split, fingerprint)
     todo = [i for i in range(clips) if not is_complete(out / clip_id(split, i))]
     result = GenerateResult(written=0, skipped=clips - len(todo))
-    init_args = (data_dir, cfg, split, name, seed)
+    init_args = (data_dir, cfg, split, name, seed, fingerprint)
     if workers == 1:
         _init(*init_args)
         outcomes = (_work(i) for i in todo)
@@ -157,5 +220,5 @@ def generate(
             result.written += 1
         else:
             result.failed.append((cid, err))
-    _write_manifest(data_dir, name, split, clips, hours, seed, cfg)
+    _write_manifest(data_dir, name, split, clips, hours, seed, cfg, fingerprint)
     return result
