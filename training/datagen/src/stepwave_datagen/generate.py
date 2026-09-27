@@ -65,8 +65,9 @@ def make_clip(
 ) -> tuple[np.ndarray, dict[str, np.ndarray], dict[str, Any]]:
     scene = sample_scene(pools, cfg.scene, cfg.render, cfg.bus, seed, cid)
     stems = render_stems(scene, load, hrtf, cfg.render)
-    mix, stems = apply_bus(stems, cfg.bus, scene.loudness_rms_dbfs)
+    mix, stems, bus_info = apply_bus(stems, cfg.bus, scene.loudness_rms_dbfs)
     meta = dataclasses.asdict(scene)
+    meta.update(bus_info)
     meta.update(
         {"set": set_name, "split": split, "footstep_snr_db_definition": "pre-bus active RMS ratio"}
     )

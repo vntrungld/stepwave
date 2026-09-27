@@ -53,6 +53,9 @@ def test_generate_writes_valid_clips(tiny) -> None:
         assert 20 * np.log10(max(err, 1e-12)) < -80
         assert np.abs(mix).max() <= 10 ** (-1 / 20)
         assert meta["clip_id"] == clip.name
+        rms_db = 20 * np.log10(np.sqrt(np.mean(mix.astype(np.float64) ** 2)))
+        assert abs(meta["mix_rms_dbfs"] - rms_db) < 0.01
+        assert meta["bus_scale"] > 0.0
     manifest = json.loads((data / "sets/s/manifest.json").read_text())
     split = manifest["splits"]["train"]
     assert {k: split[k] for k in ("clips", "hours", "seed")} == {
