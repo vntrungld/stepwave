@@ -3,6 +3,7 @@
 pub mod erb;
 pub mod error;
 pub mod features;
+pub mod gru;
 pub mod limiter;
 pub mod mask;
 pub mod processor;
