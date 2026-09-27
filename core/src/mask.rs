@@ -4,8 +4,10 @@ use biquad::{Coefficients, Hertz, Type};
 use realfft::num_complex::Complex64;
 
 use crate::erb::{ErbBands, NUM_BANDS};
+use crate::gru::ModelRunner;
 use crate::profile::{EqBand, EqKind, Profile};
 use crate::stft::{Complex32, SAMPLE_RATE};
+use crate::swm::SwmModel;
 use crate::CoreError;
 
 /// Slot for anything that decides band gains. M1: static EQ; M4: the model.
@@ -13,6 +15,9 @@ pub trait MaskSource: Send {
     /// Fill `gains_db` for the current frame. `mid_spectrum` has `BINS` entries.
     /// Must not allocate, lock or panic.
     fn next_mask(&mut self, mid_spectrum: &[Complex32], gains_db: &mut [f32; NUM_BANDS]);
+
+    /// Forget any per-stream state (called by `Processor::reset`). Must not allocate.
+    fn reset(&mut self) {}
 }
 
 /// 0 dB everywhere; used for bypass/A-B listening.
@@ -75,6 +80,46 @@ impl MaskSource for ExternalMask {
             None => gains_db.fill(0.0),
         }
         self.next = self.next.saturating_add(1);
+    }
+}
+
+/// The trained model: mid band energies → per-band gains, scaled by the profile's strength
+/// relative to the strength the model was trained with, clamped to the model's gain range.
+pub struct ModelMask {
+    runner: ModelRunner,
+    bands: ErbBands,
+    energies: [f32; NUM_BANDS],
+    scale: f32,
+    lo: f32,
+    hi: f32,
+}
+
+impl ModelMask {
+    pub fn new(model: &SwmModel, strength_db: f32) -> Self {
+        let (lo, hi) = model.gain_db_range();
+        Self {
+            runner: ModelRunner::new(model),
+            bands: ErbBands::new(),
+            energies: [0.0; NUM_BANDS],
+            scale: strength_db / model.strength_db(),
+            lo,
+            hi,
+        }
+    }
+}
+
+impl MaskSource for ModelMask {
+    fn next_mask(&mut self, mid_spectrum: &[Complex32], gains_db: &mut [f32; NUM_BANDS]) {
+        self.bands
+            .band_energies_db(mid_spectrum, &mut self.energies);
+        self.runner.step(&self.energies, gains_db);
+        for g in gains_db.iter_mut() {
+            *g = (*g * self.scale).clamp(self.lo, self.hi);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.runner.reset();
     }
 }
 

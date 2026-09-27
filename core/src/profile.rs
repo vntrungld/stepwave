@@ -15,9 +15,9 @@ pub struct Profile {
     pub name: String,
     #[serde(rename = "match")]
     pub match_rules: MatchRules,
-    /// Model file; unused until M4.
+    /// Model file, relative to the repo root.
     pub model: String,
-    /// Footstep boost strength; unused until M4.
+    /// Footstep boost relative to the model's training strength, in dB.
     pub strength_db: f32,
     #[serde(default)]
     pub fallback_eq: Vec<EqBand>,
@@ -67,6 +67,12 @@ impl Profile {
             return Err(CoreError::InvalidProfile(format!(
                 "preamp_db {} must have |gain| <= {MAX_GAIN_DB} dB",
                 self.preamp_db
+            )));
+        }
+        if !(0.0..=MAX_GAIN_DB).contains(&self.strength_db) {
+            return Err(CoreError::InvalidProfile(format!(
+                "strength_db {} must be in [0, {MAX_GAIN_DB}] dB",
+                self.strength_db
             )));
         }
         for (i, band) in self.fallback_eq.iter().enumerate() {
@@ -183,5 +189,19 @@ mod tests {
     #[test]
     fn cs2_profile_still_parses_with_gain_limit_enforced() {
         assert!(Profile::from_json(CS2).is_ok());
+    }
+
+    #[test]
+    fn profile_rejects_strength_out_of_range() {
+        let cs2 = include_str!("../../profiles/cs2.json");
+        for bad in ["-1.0", "30.0"] {
+            let json = cs2.replace("\"strength_db\": 6.0", &format!("\"strength_db\": {bad}"));
+            assert!(
+                Profile::from_json(&json).is_err(),
+                "strength {bad} accepted"
+            );
+        }
+        let zero = cs2.replace("\"strength_db\": 6.0", "\"strength_db\": 0.0");
+        assert!(Profile::from_json(&zero).is_ok());
     }
 }

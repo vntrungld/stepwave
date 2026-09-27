@@ -4,9 +4,10 @@ use realfft::RealFftPlanner;
 
 use crate::erb::{ErbBands, NUM_BANDS};
 use crate::limiter::Limiter;
-use crate::mask::{MaskSource, StaticEqMask};
+use crate::mask::{MaskSource, ModelMask, StaticEqMask};
 use crate::smoother::GainSmoother;
 use crate::stft::{Complex32, StftChannel, BINS, HOP, SAMPLE_RATE, WIN};
+use crate::swm::SwmModel;
 use crate::{CoreError, Profile};
 
 /// Lower bound for a per-band mask value, in dB, after which it is clamped.
@@ -41,6 +42,18 @@ impl Processor {
     pub fn new(profile: &Profile, sample_rate: u32) -> Result<Self, CoreError> {
         let mask = StaticEqMask::from_profile(profile, &ErbBands::new())?;
         Self::with_mask(Box::new(mask), sample_rate)
+    }
+
+    /// Model-driven processor; strength comes from `profile.strength_db`.
+    pub fn with_model(
+        profile: &Profile,
+        model: &SwmModel,
+        sample_rate: u32,
+    ) -> Result<Self, CoreError> {
+        Self::with_mask(
+            Box::new(ModelMask::new(model, profile.strength_db)),
+            sample_rate,
+        )
     }
 
     pub fn with_mask(mask: Box<dyn MaskSource>, sample_rate: u32) -> Result<Self, CoreError> {
@@ -112,6 +125,7 @@ impl Processor {
     pub fn reset(&mut self) {
         self.left.reset();
         self.right.reset();
+        self.mask.reset();
         self.smoother.reset();
         self.limiter.reset();
         self.in_l.fill(0.0);
