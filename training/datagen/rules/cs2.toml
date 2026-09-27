@@ -1,20 +1,324 @@
 # Path rules: first match wins; unmatched files become "other".
 # Patterns are globs on the path relative to training/data/raw/:
 #   *  one path segment part, ** any depth, {surface} / {map} capture one segment.
-# STARTER RULES: rewritten in Task 12 after inspecting the real extracted tree.
+#
+# Derived from the CS2 sound tree exported by Source2Viewer-CLI 20.0:
+#   sounds/player/footsteps/<surface>_NN.wav   flat folder, surface in the file name
+#   sounds/weapons/<weapon>/<weapon>_NN.wav     fire, mixed with reload/draw/inspect foley
+#   sounds/weapons/{hegrenade,flashbang,c4,molotov,incgrenade,smokegrenade}/  utility
+#   sounds/ambient/<map>/ and sounds/ambient/common/<category>/
+
+# ---------------------------------------------------------------- footsteps
+# Landings (and the jump push-off) are footstep-like impacts: one "land" surface.
+[[rule]]
+pattern = "sounds/player/footsteps/land_*"
+class = "footsteps"
+surface = "land"
 
 [[rule]]
-pattern = "sounds/player/footsteps/{surface}/**"
+pattern = "sounds/player/footsteps/jump_*"
+class = "footsteps"
+surface = "land"
+
+[[rule]]
+pattern = "sounds/player/land*"
+class = "footsteps"
+surface = "land"
+
+[[rule]]
+pattern = "sounds/player/footsteps/ladder*"
+class = "footsteps"
+surface = "ladder"
+
+[[rule]]
+pattern = "sounds/player/footsteps/water_*"
+class = "footsteps"
+surface = "water"
+
+[[rule]]
+pattern = "sounds/player/footsteps/puddle*"
+class = "footsteps"
+surface = "water"
+
+[[rule]]
+pattern = "sounds/player/footsteps/wet_*"
+class = "footsteps"
+surface = "water"
+
+[[rule]]
+pattern = "sounds/player/pl_wade*"
+class = "footsteps"
+surface = "water"
+
+[[rule]]
+pattern = "sounds/player/water/pl_wade*"
+class = "footsteps"
+surface = "water"
+
+# Clothing/gear rustle layered on every step (CT and T variants).
+[[rule]]
+pattern = "sounds/player/footsteps/suit_*"
+class = "footsteps"
+surface = "suit"
+
+[[rule]]
+pattern = "sounds/player/footsteps/concrete_*"
+class = "footsteps"
+surface = "concrete"
+
+[[rule]]
+pattern = "sounds/player/footsteps/metal_railing_*"
+class = "footsteps"
+surface = "metal_railing"
+
+# Everything else: <surface>_NN.* (carpet, dirt, grass, gravel, tile, wood, sand, snow,
+# mud, glass, rubber, metal_solid, metal_grate, metal_chainlink, metal_auto, metal_vent,
+# plastic_barrel, and the generic "bass" low-end layer).
+[[rule]]
+pattern = "sounds/player/footsteps/{surface}_??.*"
 class = "footsteps"
 
+# --------------------------------------------------------------- explosions
 [[rule]]
-pattern = "sounds/weapons/hegrenade/**"
+pattern = "sounds/weapons/hegrenade/*detonate*"
 class = "explosions"
 
 [[rule]]
-pattern = "sounds/weapons/**"
+pattern = "sounds/weapons/flashbang/flashbang_explode*"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/c4/c4_explode*"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/c4/c4_exp_deb*"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/c4/c4_shockwave*"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/molotov/*detonate*"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/incgrenade/*detonate*"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/smokegrenade/sg_explode*"
+class = "explosions"
+
+# ------------------------------------------------------------------ gunfire
+# Non-gun weapon folders: the rest of their content is foley.
+[[rule]]
+pattern = "sounds/weapons/knife*/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/bknife/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/hegrenade/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/flashbang/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/smokegrenade/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/molotov/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/incgrenade/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/decoy/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/c4/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/foley/**"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/fx/**"
+class = "other"
+
+# Gun folders mix fire with handling foley; exclude foley by keyword.
+[[rule]]
+pattern = "sounds/weapons/*/*draw*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*clip*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*ammo*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*bolt*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*slide*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*side*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*zoom*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*inspect*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*lookat*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*silencer_on*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*silencer_off*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*screw*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*pump*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*shell*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*gear*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*element*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*jangle*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*hit*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*cover*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*box*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*chain*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*clean*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*prepare*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*reload*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*handle*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*hammer*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*mech*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*catch*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*charg*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*taunt*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*empty*"
+class = "other"
+
+[[rule]]
+pattern = "sounds/weapons/*/*birthday*"
+class = "other"
+
+# What remains in a gun folder is a shot (close, distant, silenced, unsilenced).
+[[rule]]
+pattern = "sounds/weapons/*/*"
 class = "gunfire"
 
+# ----------------------------------------------------------------- ambience
+# Loose files in sounds/ambient/ that name their map.
+[[rule]]
+pattern = "sounds/ambient/de_inferno_*"
+class = "ambience"
+map = "inferno"
+
+[[rule]]
+pattern = "sounds/ambient/de_overpass_*"
+class = "ambience"
+map = "overpass"
+
+[[rule]]
+pattern = "sounds/ambient/techno_overpass*"
+class = "ambience"
+map = "overpass"
+
+[[rule]]
+pattern = "sounds/ambient/de_train_*"
+class = "ambience"
+map = "train"
+
+[[rule]]
+pattern = "sounds/ambient/officenews*"
+class = "ambience"
+map = "office"
+
+# Per-map folders; sounds/ambient/common/** (shared beds and emitters) becomes map "common".
 [[rule]]
 pattern = "sounds/ambient/{map}/**"
 class = "ambience"

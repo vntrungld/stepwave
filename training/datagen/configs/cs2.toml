@@ -6,9 +6,10 @@ url = "https://sofacoustics.org/data/database/mit/mit_kemar_normal_pinna.sofa"
 file = "mit_kemar_normal_pinna.sofa"
 
 [split]
-# Chosen after inspecting the extracted sound tree (Task 12).
-holdout_maps = []
-holdout_surfaces = []
+# Chosen from the extracted CS2 tree: mid-sized pools, so train keeps the big ones
+# (common, cache, nuke / land, water) and val still has variety.
+holdout_maps = ["overpass"]  # 39 ambience files
+holdout_surfaces = ["tile"]  # 14 footstep files
 train_hours = 50.0
 val_hours = 5.0
 
