@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import shutil
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor
@@ -48,12 +49,21 @@ def _binding() -> tuple[Any, Any]:
     return soundfile, stepwave_py
 
 
+def _mp_context() -> multiprocessing.context.BaseContext:
+    """`forkserver` starts worker processes from a clean, single-threaded server process,
+    avoiding the "fork() of a multi-threaded process" deadlock risk (torch and other
+    libraries start background threads); `spawn` is the fallback where forkserver isn't
+    available, e.g. Windows."""
+    method = "forkserver" if "forkserver" in multiprocessing.get_all_start_methods() else "spawn"
+    return multiprocessing.get_context(method)
+
+
 def map_jobs(fn: Callable[[T], R], items: Iterable[T], workers: int) -> Iterator[R]:
     """Ordered map, in-process for workers <= 1, else over a process pool."""
     if workers <= 1:
         yield from map(fn, items)
         return
-    with ProcessPoolExecutor(workers) as pool:
+    with ProcessPoolExecutor(workers, mp_context=_mp_context()) as pool:
         yield from pool.map(fn, items, chunksize=4)
 
 

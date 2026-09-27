@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,7 @@ from helpers import make_set
 from stepwave_model import SIGNALS
 from stepwave_model.cli import app
 from stepwave_model.errors import TrainerError
-from stepwave_model.prep import load_manifest, load_split, prep_set, read_stereo
+from stepwave_model.prep import _mp_context, load_manifest, load_split, prep_set, read_stereo
 
 
 def quiet(_: str) -> None:
@@ -82,6 +83,16 @@ def test_stale_partial_dir_is_replaced(tmp_path: Path) -> None:
     out = prep_set(tmp_path, "t", log=quiet)
     assert not junk.exists()
     assert load_split(out, "train").frames == 400
+
+
+def test_map_jobs_uses_forkserver_or_spawn() -> None:
+    """map_jobs must not fork() a multi-threaded process (pytest's own DeprecationWarning
+    on plain fork(); torch and other libraries start background threads) — Minor
+    finding #4."""
+    method = _mp_context().get_start_method()
+    available = multiprocessing.get_all_start_methods()
+    assert method == ("forkserver" if "forkserver" in available else "spawn")
+    assert method != "fork"
 
 
 def test_workers_match_serial(tmp_path: Path) -> None:
