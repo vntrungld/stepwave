@@ -54,8 +54,8 @@ Dependencies:
 - Also `numpy`, `typer`, `matplotlib` (report plots).
 
 All generated data lives under the git-ignored `training/data/`: `features/`, `runs/`,
-`real/`. `models/cs2.swm` is committed. It holds learned numbers only, about 450 KB, and
-no game audio.
+`real/`, `eval/`. `models/*.swm` stays git-ignored as the existing `.gitignore` already says
+("publish via releases"); the file is about 450 KB of learned numbers and no game audio.
 
 ## Components
 
@@ -84,7 +84,14 @@ stepwave_py.apply_band_gains(left: f32[n], right: f32[n], gains_db: f32[frames, 
 - `gains_db.shape[0]` must equal the frame count `band_energies_db` returns for the same
   input, otherwise `ValueError`. Mismatched `left`/`right` lengths or a wrong
   second dimension also raise `ValueError`.
-- Releases the GIL during processing, like `band_energies_db`.
+
+Two small helpers so evaluation can use the exact Rust numbers instead of Python copies:
+
+```python
+stepwave_py.smooth_gains_db(gains_db: f32[frames, 32]) -> f32[frames, 32]   # core GainSmoother
+stepwave_py.static_eq_gains_db(profile_json: str) -> f32[32]                 # StaticEqMask gains
+```
+`static_eq_gains_db` raises `ValueError` with the core error text for an invalid profile.
 
 ### `prep`
 
@@ -94,7 +101,8 @@ For every clip in `sets/<set>/{train,val}/`:
   arrays.
 - Per split, write one concatenated array per signal: `mix.npy`, `footsteps.npy`,
   `gunfire.npy`, `explosions.npy`, `ambience.npy`, `other.npy`. Also write `index.npy`
-  (int64 `[clips, 2]`: frame offset and frame count).
+  (int64 `[clips, 2]`: frame offset and frame count), and `clips.json` (clip ids in index
+order).
 - Write `manifest.json` with the set name, the source manifest fingerprint of each split,
   the `stepwave_py` constants (`SAMPLE_RATE`, `HOP`, `NUM_BANDS`), the frame count, and
   the mix-feature `mean`/`std` per band computed on **train only**.
@@ -102,7 +110,7 @@ For every clip in `sets/<set>/{train,val}/`:
   manifest fingerprint matches, `--force` rebuilds it.
 - 50 h ≈ 18 M frames × 32 × 6 × 2 B ≈ 7 GB.
 
-### Target (`targets.py`, numpy and torch, identical formula)
+### Target (`targets.py`, one torch implementation used by training and evaluation)
 
 Per frame and band, with powers `P_c = 10^(E_c/10)`:
 ```
@@ -158,6 +166,8 @@ L = mean((ŷ − y)²)  +  λ · mean_over_inactive_frames(relu(ŷ)²)      λ =
 
 - Loads the whole feature arrays into RAM.
 - Each step samples random 400-frame (4 s) windows from random train clips; batch 128.
+  - A window is read with one extra leading frame, so the first delta is the true
+    difference, then that frame is dropped.
   - Features and targets are built on the fly on the training device.
   - No multi-worker DataLoader (Windows-safe).
 - AdamW, lr 1e-3, weight decay 1e-4, cosine decay, gradient clip 1.0, 30 epochs. An epoch
@@ -229,7 +239,7 @@ For the static-EQ mode the gains are the constant `StaticEqMask` values.
 
 **Real recordings** (`training/data/real/*.wav|flac`, 48 kHz stereo, otherwise skipped
 with a warning):
-- Write `runs/<run>/eval/real/<name>_{off,eq,model}.flac` through the real processor with
+- Write `<eval out>/real/<name>_{off,eq,model}.flac` through the real processor with
   the limiter on, loudness-matched to the bypass RMS for fair listening.
 - Write a gain heatmap PNG (32 bands × time).
 - Report the % of frames with any band above +2 dB.
@@ -239,7 +249,7 @@ Recording guide (in the README):
 - `pw-record --target <sink>.monitor --rate 48000 --channels 2 training/data/real/<name>.wav`;
 - 5–10 clips of 1–2 min, a mix of quiet rounds and firefights.
 
-**Report:** `runs/<run>/eval/report.md` with the A/B/C table, a per-band mean-gain plot,
+**Report:** `training/data/eval/<swm stem>/report.md` (or `--out`) with the A/B/C table, a per-band mean-gain plot,
 a gain histogram, and 5 val listening examples (`val_XX_{off,eq,model}.flac`).
 
 ## Error handling
@@ -282,7 +292,7 @@ These are operational steps, run by the user with guidance:
 2. Laptop: `trainer prep cs2`, then copy `training/data/features/cs2/` to the Windows PC.
 3. PC: `uv sync`, then `trainer train …`. Record the seconds per epoch.
 4. Copy `runs/<run>/` back. Then run `trainer export`, `trainer eval`, and listen.
-5. Commit `models/cs2.swm` together with the eval summary in `docs/measurements/`.
+5. Commit the eval summary to `docs/measurements/`; keep `models/cs2.swm` local (git-ignored).
 
 ## Out of scope for M3
 
