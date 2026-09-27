@@ -178,7 +178,7 @@ assets.
 | Static EQ response | cs2 profile, white noise, long average spectrum → measured gain at 120 Hz, 2.5 kHz, 5 kHz within 1.5 dB of the `biquad` analytic response (including preamp) |
 | Stereo image | Correlated noise panned 70/30 → output L/R energy ratio within 0.1 dB of input; L/R correlation within 0.01 |
 | No clipping | +12 dBFS sine sweep → output peak ≤ −1 dBFS (0.891) |
-| Smoother | Step up reaches ≥ 90 % in one frame; step down follows the 80 ms constant within 10 % |
+| Smoother | Step up reaches ≥ 85 % (1 − e⁻²) in one frame; step down follows the 80 ms constant within 10 % |
 | Rate rejection | `Processor::new(_, 44100)` → `UnsupportedSampleRate` |
 | Block-size independence | Same input processed in blocks of 1, 64, 480, 1000 → identical output |
 | Profile parse | `profiles/cs2.json` parses. Invalid q/freq is rejected |

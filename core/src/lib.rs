@@ -3,6 +3,7 @@
 pub mod erb;
 pub mod error;
 pub mod profile;
+pub mod smoother;
 pub mod stft;
 pub mod testing;
 
