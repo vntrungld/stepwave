@@ -1,0 +1,13 @@
+{
+  "id": "cs2",
+  "name": "Counter-Strike 2",
+  "match": { "windows": ["cs2.exe"], "linux": ["cs2"] },
+  "model": "models/cs2.swm",
+  "strength_db": 6.0,
+  "fallback_eq": [
+    { "type": "lowshelf", "freq": 120, "gain": -4, "q": 0.7 },
+    { "type": "peak", "freq": 2500, "gain": 3, "q": 1.0 },
+    { "type": "peak", "freq": 5000, "gain": 2, "q": 1.0 }
+  ],
+  "preamp_db": -4
+}

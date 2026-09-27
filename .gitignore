@@ -1,0 +1,20 @@
+/target
+**/*.rs.bk
+__pycache__/
+.venv/
+*.egg-info/
+.ruff_cache/
+
+# Never commit game assets or datasets
+training/data/
+*.vpk
+*.vsnd_c
+
+# Trained weights (publish via releases instead)
+models/*.swm
+*.pt
+*.onnx
+
+.DS_Store
+.idea/
+.vscode/
