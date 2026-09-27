@@ -22,3 +22,8 @@ cargo run --release -p stepwave-cli -- in.wav out-bypass.wav --profile cs2 --byp
 Input must be 48 kHz (mono or stereo). Output is 48 kHz stereo 32-bit float, time-aligned
 with the input. M1 applies the profile's static fallback EQ through the full spectral
 pipeline; the model arrives in M4.
+
+## Training data (M2)
+
+Synthetic, labelled mixtures are generated from locally extracted game sounds by
+[`training/datagen`](training/datagen/README.md). Game assets are never committed.
