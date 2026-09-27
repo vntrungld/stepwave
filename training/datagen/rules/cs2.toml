@@ -1,0 +1,20 @@
+# Path rules: first match wins; unmatched files become "other".
+# Patterns are globs on the path relative to training/data/raw/:
+#   *  one path segment part, ** any depth, {surface} / {map} capture one segment.
+# STARTER RULES: rewritten in Task 12 after inspecting the real extracted tree.
+
+[[rule]]
+pattern = "sounds/player/footsteps/{surface}/**"
+class = "footsteps"
+
+[[rule]]
+pattern = "sounds/weapons/hegrenade/**"
+class = "explosions"
+
+[[rule]]
+pattern = "sounds/weapons/**"
+class = "gunfire"
+
+[[rule]]
+pattern = "sounds/ambient/{map}/**"
+class = "ambience"
