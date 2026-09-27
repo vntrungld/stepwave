@@ -54,11 +54,12 @@ impl StftChannel {
             *f = x * w;
         }
         // Buffer lengths are fixed at construction, so this cannot fail.
-        let _ = self.fwd.process_with_scratch(
+        let r = self.fwd.process_with_scratch(
             &mut self.frame,
             &mut self.spectrum,
             &mut self.scratch_fwd,
         );
+        debug_assert!(r.is_ok());
     }
 
     pub fn spectrum(&self) -> &[Complex32] {
@@ -71,14 +72,17 @@ impl StftChannel {
 
     /// Inverse-transform the current spectrum, overlap-add, and emit one finished hop.
     pub fn synthesize(&mut self, hop_out: &mut [f32; HOP]) {
-        // realfft's inverse rejects non-zero imaginary parts at DC and Nyquist.
+        // realfft's inverse rejects non-zero imaginary parts at DC and Nyquist;
+        // with that guaranteed, and buffer lengths fixed at construction, this
+        // cannot fail.
         self.spectrum[0].im = 0.0;
         self.spectrum[BINS - 1].im = 0.0;
-        let _ = self.inv.process_with_scratch(
+        let r = self.inv.process_with_scratch(
             &mut self.spectrum,
             &mut self.frame,
             &mut self.scratch_inv,
         );
+        debug_assert!(r.is_ok());
         let scale = 1.0 / WIN as f32;
         for ((o, &x), &w) in self.ola.iter_mut().zip(&self.frame).zip(&self.window) {
             *o += x * w * scale;
