@@ -9,8 +9,10 @@ pub mod processor;
 pub mod profile;
 pub mod smoother;
 pub mod stft;
+pub mod swm;
 pub mod testing;
 
 pub use error::CoreError;
 pub use processor::Processor;
 pub use profile::Profile;
+pub use swm::SwmModel;
