@@ -111,14 +111,67 @@ fn rejects_bad_header_fields() {
             "gain_db_range",
             Box::new(|h| h["gain_db_range"] = serde_json::json!([12.0, -12.0])),
         ),
+        (
+            "gain_db_range",
+            Box::new(|h| h["gain_db_range"] = serde_json::json!([1.0, 12.0])),
+        ),
         ("strength_db", Box::new(|h| h["strength_db"] = 0.0.into())),
         (
             "tensors",
             Box::new(|h| h["tensors"][0]["name"] = "dense.weight".into()),
         ),
+        (
+            "feature.delta",
+            Box::new(|h| h["feature"]["delta"] = "raw_diff".into()),
+        ),
     ];
     for (field, edit) in cases {
         let msg = err_text(&with_header(edit));
         assert!(msg.contains(field), "{field}: message was {msg:?}");
+    }
+}
+
+#[test]
+fn accepts_missing_feature_delta() {
+    let bytes = with_header(|h| {
+        h["feature"].as_object_mut().unwrap().remove("delta");
+    });
+    assert!(SwmModel::from_bytes(&bytes).is_ok());
+}
+
+#[test]
+fn rejects_declared_header_length_exceeding_file_size() {
+    let mut bytes = FIXTURE.to_vec();
+    let too_big = bytes.len() as u32 + 1;
+    bytes[8..12].copy_from_slice(&too_big.to_le_bytes());
+    assert!(err_text(&bytes).contains("truncated"));
+}
+
+#[test]
+fn rejects_header_length_of_u32_max_without_panicking() {
+    let mut bytes = FIXTURE.to_vec();
+    bytes[8..12].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    assert!(err_text(&bytes).contains("truncated"));
+}
+
+#[test]
+fn load_rejects_oversized_file_without_reading_it_fully() {
+    let path = std::env::temp_dir().join(format!(
+        "stepwave-swm-oversize-{}-{:?}.swm",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    {
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(32 * 1024 * 1024).unwrap(); // sparse: does not actually use 32 MiB on disk
+    }
+    let result = SwmModel::load(&path);
+    std::fs::remove_file(&path).ok();
+    match result {
+        Err(CoreError::InvalidModel(msg)) => assert!(
+            msg.contains("16") && msg.to_lowercase().contains("mib"),
+            "message was {msg:?}"
+        ),
+        other => panic!("expected InvalidModel, got {other:?}"),
     }
 }

@@ -87,7 +87,13 @@ struct Sizes {
 struct Feature {
     mean: Vec<f32>,
     std: Vec<f32>,
+    /// Delta convention name; if present it must be the one `core` implements.
+    #[serde(default)]
+    delta: Option<String>,
 }
+
+/// The only `feature.delta` convention `ModelRunner` implements.
+const DELTA_CONVENTION: &str = "raw_diff_over_std";
 
 #[derive(Deserialize)]
 struct TensorSpec {
@@ -150,13 +156,26 @@ impl Header {
         require(
             self.gain_db_range.len() == 2
                 && self.gain_db_range.iter().all(|v| v.is_finite())
-                && self.gain_db_range[0] < self.gain_db_range[1],
-            || format!("gain_db_range {:?} must be [low, high]", self.gain_db_range),
+                && self.gain_db_range[0] < self.gain_db_range[1]
+                && self.gain_db_range[0] <= 0.0
+                && 0.0 <= self.gain_db_range[1],
+            || {
+                format!(
+                    "gain_db_range {:?} must be [low, high] with low <= 0 <= high \
+                     (so strength 0 always yields unity gain)",
+                    self.gain_db_range
+                )
+            },
         )?;
         require(
             self.strength_db.is_finite() && self.strength_db > 0.0,
             || format!("strength_db {} must be finite and > 0", self.strength_db),
         )?;
+        if let Some(delta) = &self.feature.delta {
+            require(delta == DELTA_CONVENTION, || {
+                format!("feature.delta {delta:?}, expected {DELTA_CONVENTION:?}")
+            })?;
+        }
         let layout_ok = self.tensors.len() == LAYOUT.len()
             && self
                 .tensors
@@ -169,9 +188,34 @@ impl Header {
     }
 }
 
+/// Largest `.swm` file `load` will read. Real model files are a few hundred KB;
+/// this guards against accidentally (or maliciously) pointing the loader at a
+/// huge or unbounded file (e.g. a device node) before any bytes are parsed.
+const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
 impl SwmModel {
     pub fn load(path: &Path) -> Result<Self, CoreError> {
-        Self::from_bytes(&std::fs::read(path)?)
+        use std::io::Read;
+
+        let mut file = std::fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        if len > MAX_FILE_BYTES {
+            return Err(invalid(format!(
+                "model file is {len} bytes, exceeds the {MAX_FILE_BYTES}-byte (16 MiB) limit"
+            )));
+        }
+        // Read one byte past the cap: a race that grows the file after the metadata
+        // check above still gets caught here, without ever buffering the whole thing.
+        let mut bytes = Vec::with_capacity(len as usize);
+        (&mut file)
+            .take(MAX_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            return Err(invalid(format!(
+                "model file exceeds the {MAX_FILE_BYTES}-byte (16 MiB) limit"
+            )));
+        }
+        Self::from_bytes(&bytes)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CoreError> {
