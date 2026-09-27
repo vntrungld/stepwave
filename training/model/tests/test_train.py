@@ -96,12 +96,13 @@ def test_training_reduces_val_loss(tmp_path: Path) -> None:
         assert (run / name).is_file()
     info = json.loads((run / "train.json").read_text())
     assert info["device"] == "cpu" and info["features"]["fingerprint"] == ck["features_fingerprint"]
-    rows = list(csv.DictReader((run / "log.csv").open()))
+    with (run / "log.csv").open() as f:
+        rows = list(csv.DictReader(f))
     assert rows and set(rows[0]) == {
         "epoch",
         "train_loss",
         "val_loss",
-        "false_boost_pct",
+        "false_boost_raw_pct",
         "seconds",
     }
 
@@ -119,7 +120,8 @@ def test_resume_continues_and_checks_features(tmp_path: Path) -> None:
         log=quiet,
     )
     assert torch.load(run / "last.pt", weights_only=False)["epoch"] == 2
-    assert len(list(csv.DictReader((run / "log.csv").open()))) == 3
+    with (run / "log.csv").open() as f:
+        assert len(list(csv.DictReader(f))) == 3
     manifest = feats / "manifest.json"
     data = json.loads(manifest.read_text())
     data["fingerprint"] = "0" * 16

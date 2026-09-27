@@ -18,7 +18,7 @@ from .errors import TrainerError
 from .model import BandMaskNet, false_boost_frames, mask_loss
 from .prep import load_manifest, load_split
 
-LOG_HEADER = "epoch,train_loss,val_loss,false_boost_pct,seconds\n"
+LOG_HEADER = "epoch,train_loss,val_loss,false_boost_raw_pct,seconds\n"
 
 
 def pick_device(name: str) -> torch.device:
@@ -156,7 +156,7 @@ def train(
             "features_fingerprint": manifest["fingerprint"],
             "feature": feature,
             "val_loss": val_loss,
-            "false_boost_pct": fb,
+            "false_boost_raw_pct": fb,
         }
         torch.save(ck, last)
         if improved:
