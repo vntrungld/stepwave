@@ -17,7 +17,8 @@ pub struct Profile {
     pub match_rules: MatchRules,
     /// Model file, relative to the repo root.
     pub model: String,
-    /// Footstep boost relative to the model's training strength, in dB.
+    /// Footstep boost, in dB; model gains scale by `strength_db / model
+    /// strength_db` (0 = unity, i.e. the model is bypassed to 0 dB gain).
     pub strength_db: f32,
     #[serde(default)]
     pub fallback_eq: Vec<EqBand>,
