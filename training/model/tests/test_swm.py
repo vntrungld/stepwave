@@ -86,6 +86,29 @@ def test_numpy_features_match_torch() -> None:
     np.testing.assert_allclose(swm_ref.features(e, mean, std), want.numpy(), atol=1e-5)
 
 
+def test_swm_ref_docstring_specifies_the_maths_for_the_m4_port() -> None:
+    """swm_ref's module docstring is the spec M4's Rust port is written and checked
+    against; it must fully specify the maths, not just point at the code (Minor
+    finding #8)."""
+    doc = (swm_ref.__doc__ or "").lower()
+    required = [
+        "norm",  # input features: (E - mean) / std
+        "delta",  # input features: (E[t] - E[t-1]) / std, 0 at t = 0
+        "delta[0] = 0",
+        "dense",
+        "relu",
+        "gru",
+        "r, z, n",  # PyTorch gate order
+        "zero initial hidden state",
+        "sigmoid",
+        "gain_db_range",
+        "header order",  # tensor layout matches the .swm header's tensor order
+        "1e-3 db",  # M4's f32 port must match this reference within this tolerance
+    ]
+    missing = [term for term in required if term not in doc]
+    assert not missing, f"swm_ref docstring is missing: {missing}"
+
+
 def test_export_parity_failure_removes_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
