@@ -22,6 +22,15 @@ impl Limiter {
     }
 
     pub fn process(&mut self, left: &mut f32, right: &mut f32) {
+        // A NaN/±inf sample must never reach the output: silence it before peak
+        // detection so it can't poison `peak`/`gain` or survive the clamp below
+        // (NaN.clamp() returns NaN).
+        if !left.is_finite() {
+            *left = 0.0;
+        }
+        if !right.is_finite() {
+            *right = 0.0;
+        }
         let peak = left.abs().max(right.abs());
         let limit = if peak > CEILING { CEILING / peak } else { 1.0 };
         // Drop instantly; recover towards `limit` without ever exceeding it.
@@ -88,5 +97,39 @@ mod tests {
         for (a, b) in l.iter().zip(&r) {
             assert!((a * 0.25 - b).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn non_finite_samples_are_replaced_and_stay_within_ceiling() {
+        let mut lim = Limiter::new();
+        for (mut l, mut r) in [
+            (f32::NAN, 0.0f32),
+            (f32::INFINITY, f32::NEG_INFINITY),
+            (f32::NAN, f32::NAN),
+            (0.0, f32::INFINITY),
+        ] {
+            lim.process(&mut l, &mut r);
+            assert!(l.is_finite() && r.is_finite(), "got ({l}, {r})");
+            assert!(l.abs() <= CEILING && r.abs() <= CEILING, "got ({l}, {r})");
+        }
+    }
+
+    #[test]
+    fn passes_quiet_signal_normally_after_non_finite_spike() {
+        let mut lim = Limiter::new();
+        let mut nan_l = f32::NAN;
+        let mut nan_r = f32::INFINITY;
+        lim.process(&mut nan_l, &mut nan_r);
+
+        // The spike is replaced with silence before peak detection, so it never
+        // triggers gain reduction: the limiter's gain stays at unity and a
+        // following quiet signal (well under the ceiling) must pass unchanged.
+        let quiet = sine(440.0, 0.5, 4_800);
+        let mut out = quiet.clone();
+        let mut out_r = quiet.clone();
+        for (a, b) in out.iter_mut().zip(out_r.iter_mut()) {
+            lim.process(a, b);
+        }
+        assert_eq!(out, quiet);
     }
 }
