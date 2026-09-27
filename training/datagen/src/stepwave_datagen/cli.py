@@ -66,3 +66,27 @@ def extract(
         typer.echo("extracted" if ran else "raw/ is up to date with the VPK; nothing to do")
 
     run(body)
+
+
+@app.command()
+def catalog(
+    data_dir: Path = typer.Option(DATA_DIR),
+    rules: Path = typer.Option(RULES),
+    workers: int | None = typer.Option(None, help="processes (default: all cores)"),
+) -> None:
+    """Label, resample and measure every extracted sound; write catalog.csv + report."""
+    from . import catalog as cat
+    from .rules import load_rules
+
+    def body() -> None:
+        raw = data_dir / "raw"
+        if not raw.is_dir():
+            raise DatagenError(f"{raw} not found; run `datagen extract` first")
+        entries, dropped = cat.build_catalog(raw, load_rules(rules), workers)
+        cat.write_catalog(entries, data_dir / "catalog.csv")
+        cat.write_catalog_report(entries, dropped, data_dir / "catalog-report.md")
+        typer.echo(
+            f"{len(entries)} files catalogued, {len(dropped)} dropped; see catalog-report.md"
+        )
+
+    run(body)
