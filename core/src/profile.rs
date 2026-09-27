@@ -4,6 +4,11 @@ use serde::Deserialize;
 
 use crate::CoreError;
 
+/// Largest `|gain|`, in dB, allowed for `preamp_db` or any `fallback_eq` band.
+/// A huge configured gain would silently blow past the limiter's headroom
+/// intent and defeats the point of validating the profile at all.
+pub const MAX_GAIN_DB: f32 = 24.0;
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Profile {
     pub id: String,
@@ -58,6 +63,12 @@ impl Profile {
                 "preamp_db and strength_db must be finite".into(),
             ));
         }
+        if self.preamp_db.abs() > MAX_GAIN_DB {
+            return Err(CoreError::InvalidProfile(format!(
+                "preamp_db {} must have |gain| <= {MAX_GAIN_DB} dB",
+                self.preamp_db
+            )));
+        }
         for (i, band) in self.fallback_eq.iter().enumerate() {
             if !(band.freq > 0.0 && band.freq < 24_000.0) {
                 return Err(CoreError::InvalidProfile(format!(
@@ -74,6 +85,12 @@ impl Profile {
             if !band.gain.is_finite() {
                 return Err(CoreError::InvalidProfile(format!(
                     "fallback_eq[{i}]: gain must be finite"
+                )));
+            }
+            if band.gain.abs() > MAX_GAIN_DB {
+                return Err(CoreError::InvalidProfile(format!(
+                    "fallback_eq[{i}]: gain {} must have |gain| <= {MAX_GAIN_DB} dB",
+                    band.gain
                 )));
             }
         }
@@ -142,5 +159,29 @@ mod tests {
         let p = Profile::from_json(json).unwrap();
         assert!(p.fallback_eq.is_empty());
         assert_eq!(p.preamp_db, 0.0);
+    }
+
+    #[test]
+    fn rejects_excessive_band_gain() {
+        let json = with_band(r#"{"type":"peak","freq":1000,"gain":30,"q":1}"#);
+        assert!(matches!(
+            Profile::from_json(&json),
+            Err(CoreError::InvalidProfile(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_excessive_preamp() {
+        let json = r#"{"id":"t","name":"T","match":{},"model":"m.swm","strength_db":6.0,
+            "preamp_db":-30.0}"#;
+        assert!(matches!(
+            Profile::from_json(json),
+            Err(CoreError::InvalidProfile(_))
+        ));
+    }
+
+    #[test]
+    fn cs2_profile_still_parses_with_gain_limit_enforced() {
+        assert!(Profile::from_json(CS2).is_ok());
     }
 }
