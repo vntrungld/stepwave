@@ -109,3 +109,36 @@ def hrtf(data_dir: Path = typer.Option(DATA_DIR), config: Path = typer.Option(CO
         )
 
     run(body)
+
+
+@app.command()
+def mix(
+    name: str = typer.Argument(..., help="dataset name (folder under <data-dir>/sets)"),
+    split: str = typer.Option("train", help="train or val"),
+    hours: float | None = typer.Option(None, help="default: config split.<split>_hours"),
+    seed: int = typer.Option(1),
+    workers: int | None = typer.Option(None, help="processes (default: all cores)"),
+    data_dir: Path = typer.Option(DATA_DIR),
+    config: Path = typer.Option(CONFIG),
+) -> None:
+    """Generate seeded clips for one split; resumes where a previous run stopped."""
+    import os
+
+    from .config import load_config
+    from .generate import generate
+
+    def body() -> None:
+        cfg = load_config(config)
+        h = hours if hours is not None else getattr(cfg.split, f"{split}_hours", None)
+        if h is None:
+            raise DatagenError(f"unknown split {split!r}; expected 'train' or 'val'")
+        result = generate(data_dir, name, split, h, seed, cfg, workers or os.cpu_count() or 1)
+        typer.echo(
+            f"written {result.written}, skipped {result.skipped}, failed {len(result.failed)}"
+        )
+        for cid, err in result.failed:
+            typer.echo(f"  {cid}: {err}", err=True)
+        if result.failed:
+            raise typer.Exit(1)
+
+    run(body)
