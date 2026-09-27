@@ -35,8 +35,13 @@ def extract(vpk: Path, raw_dir: Path, cli: Path) -> bool:
         raise DatagenError(f"VPK not found: {vpk} (set 'vpk' in the config or pass --vpk)")
     marker = raw_dir / ".extract.json"
     stamp = {"vpk": str(vpk.resolve()), "mtime_ns": vpk.stat().st_mtime_ns}
-    if marker.is_file() and json.loads(marker.read_text()) == stamp:
-        return False
+    if marker.is_file():
+        try:
+            up_to_date = json.loads(marker.read_text()) == stamp
+        except (json.JSONDecodeError, OSError):
+            up_to_date = False
+        if up_to_date:
+            return False
     raw_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(build_command(cli, vpk, raw_dir), capture_output=True, text=True)
     if proc.returncode != 0:

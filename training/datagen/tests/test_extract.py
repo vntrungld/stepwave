@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 from pathlib import Path
@@ -57,6 +58,19 @@ def test_extract_runs_once_then_skips(tmp_path: Path) -> None:
     assert cli.with_suffix(".count").read_text() == "1"
     os.utime(vpk, ns=(0, 1))  # game update changes mtime
     assert extract(vpk, raw, cli) is True
+
+
+def test_corrupt_marker_triggers_reextract(tmp_path: Path) -> None:
+    cli = make_fake_cli(tmp_path)
+    vpk = tmp_path / "pak01_dir.vpk"
+    vpk.write_bytes(b"vpk")
+    raw = tmp_path / "raw"
+    assert extract(vpk, raw, cli) is True
+    marker = raw / ".extract.json"
+    marker.write_text("{not json")
+    assert extract(vpk, raw, cli) is True
+    assert cli.with_suffix(".count").read_text() == "2"
+    assert json.loads(marker.read_text())
 
 
 def test_missing_vpk(tmp_path: Path) -> None:
