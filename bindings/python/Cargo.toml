@@ -1,0 +1,16 @@
+[package]
+name = "stepwave-py"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "stepwave_py"
+crate-type = ["cdylib", "rlib"]
+# No Rust tests here: a test binary would need libpython at link time.
+test = false
+doctest = false
+
+[dependencies]
+numpy = "0.29"
+pyo3 = { version = "0.29", features = ["abi3-py311"] }
+stepwave-core = { path = "../../core" }
