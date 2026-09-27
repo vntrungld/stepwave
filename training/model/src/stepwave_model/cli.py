@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from collections.abc import Callable
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import typer
 
 from .errors import TrainerError
+
+if TYPE_CHECKING:
+    from .config import TargetConfig
 
 DATA_DIR = Path("training/data")
 CONFIG = Path("training/model/configs/cs2.toml")
@@ -90,6 +94,26 @@ def export_cmd(
     typer.echo(f"{out}: {header['param_count']} params, epoch {header['source']['epoch']}")
 
 
+def _eval_target(
+    header: dict[str, Any],
+    fallback: TargetConfig,
+    config_path: Path,
+    log: Callable[[str], None],
+) -> TargetConfig:
+    """The target the model was actually trained with, baked into the .swm header by
+    `trainer export` (key `target`); falls back to --config's target, with a logged
+    warning, for older .swm files exported before this."""
+    from .config import target_from_dict
+
+    if "target" in header:
+        return target_from_dict(header["target"])
+    log(
+        f"warning: {config_path} used for the eval target; the model header has no "
+        "'target' (exported by an older `trainer export`)"
+    )
+    return fallback
+
+
 @app.command("eval")
 def eval_cmd(
     swm: Path = typer.Argument(..., help=".swm file from `trainer export`"),
@@ -108,13 +132,16 @@ def eval_cmd(
     from .swm import read_swm
 
     def body() -> dict:
-        read_swm(swm)  # fail fast on a bad file
+        model = read_swm(swm)  # fail fast on a bad file
+        cfg = load_config(config)
+        target = _eval_target(model.header, cfg.target, config, typer.echo)
+        cfg = dataclasses.replace(cfg, target=target)
         return evaluate(
             ModelGains(swm),
             features or data_dir / "features" / set_name,
             data_dir / "sets" / set_name,
             out or data_dir / "eval" / swm.stem,
-            load_config(config),
+            cfg,
             profile,
             workers,
             label=str(swm),

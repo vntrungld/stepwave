@@ -52,8 +52,7 @@ class Batches:
         eligible = np.flatnonzero(counts >= read)
         if eligible.size == 0:
             raise TrainerError(
-                f"no clip has {read} frames (longest {int(counts.max())}); "
-                "lower train.seq_frames"
+                f"no clip has {read} frames (longest {int(counts.max())}); lower train.seq_frames"
             )
         pick = rng.choice(eligible, size=batch)
         starts = offsets[pick] + (rng.random(batch) * (counts[pick] - read + 1)).astype(np.int64)

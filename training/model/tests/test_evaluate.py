@@ -12,12 +12,13 @@ from typer.testing import CliRunner
 
 from helpers import CONFIG_PATH, PROFILE, prepped, write_run
 from stepwave_model import STEMS
-from stepwave_model.cli import app
-from stepwave_model.config import load_config
+from stepwave_model.cli import _eval_target, app
+from stepwave_model.config import config_to_dict, load_config
 from stepwave_model.errors import TrainerError
 from stepwave_model.evaluate import MODES, ModelGains, _db, evaluate, summarize
 from stepwave_model.export import export
 from stepwave_model.prep import load_split
+from stepwave_model.swm import read_swm
 from stepwave_model.targets import active_frames
 
 
@@ -141,6 +142,31 @@ def test_model_gains_is_picklable_and_shaped(tmp_path: Path) -> None:
     assert np.all(np.abs(g) <= 12.0)
 
 
+def test_export_writes_target_header(tmp_path: Path) -> None:
+    export(write_run(tmp_path / "run"), tmp_path / "m.swm")
+    model = read_swm(tmp_path / "m.swm")
+    want = json.loads(json.dumps(config_to_dict(load_config(CONFIG_PATH))["target"]))
+    assert model.header["target"] == want
+
+
+def test_eval_target_prefers_header_over_config() -> None:
+    cfg = load_config(CONFIG_PATH)
+    header_target = config_to_dict(cfg)["target"]
+    logs: list[str] = []
+    other = load_config(CONFIG_PATH).target
+    resolved = _eval_target({"target": header_target}, other, Path("c.toml"), logs.append)
+    assert resolved == cfg.target
+    assert not logs
+
+
+def test_eval_target_falls_back_with_warning() -> None:
+    cfg = load_config(CONFIG_PATH)
+    logs: list[str] = []
+    resolved = _eval_target({}, cfg.target, Path("c.toml"), logs.append)
+    assert resolved == cfg.target
+    assert any("c.toml" in line and "target" in line for line in logs)
+
+
 def test_cli_eval(tmp_path: Path) -> None:
     prepped(tmp_path, {"train": 1, "val": 1}, seconds=1.0)
     export(write_run(tmp_path / "run"), tmp_path / "m.swm")
@@ -165,3 +191,34 @@ def test_cli_eval(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert (tmp_path / "e/report.md").is_file()
+
+
+def test_cli_eval_uses_header_target_over_mismatched_config(tmp_path: Path) -> None:
+    """--config's target must not silently override what the model was trained with
+    (Minor finding #3); a --config whose [target] table is missing entirely still works
+    because the header supplies it, and no fallback warning is printed."""
+    prepped(tmp_path, {"train": 1, "val": 1}, seconds=1.0)
+    export(write_run(tmp_path / "run"), tmp_path / "m.swm")
+    bad_config = tmp_path / "bad.toml"
+    bad_config.write_text(CONFIG_PATH.read_text().replace("strength_db = 6.0", "strength_db = 1.0"))
+    result = CliRunner().invoke(
+        app,
+        [
+            "eval",
+            str(tmp_path / "m.swm"),
+            "--set",
+            "t",
+            "--data-dir",
+            str(tmp_path),
+            "--workers",
+            "1",
+            "--profile",
+            str(PROFILE),
+            "--config",
+            str(bad_config),
+            "--out",
+            str(tmp_path / "e"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "warning" not in result.output

@@ -81,6 +81,12 @@ def _section(cls: type, data: dict[str, Any], name: str) -> Any:
     return cls(**values)
 
 
+def target_from_dict(data: dict[str, Any]) -> TargetConfig:
+    """A `TargetConfig` from a plain dict, e.g. an .swm header's `target` field (written by
+    `trainer export` from `config_to_dict(cfg)["target"]`)."""
+    return _section(TargetConfig, {"target": data}, "target")
+
+
 def config_from_dict(data: dict[str, Any]) -> Config:
     return Config(
         target=_section(TargetConfig, data, "target"),

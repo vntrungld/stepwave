@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from . import HOP, NUM_BANDS, SAMPLE_RATE, swm_ref
-from .config import config_from_dict
+from .config import config_from_dict, config_to_dict
 from .errors import TrainerError
 from .model import DENSE, HIDDEN, INPUTS, BandMaskNet, param_count
 from .swm import ARCH, read_swm, write_swm
@@ -44,6 +44,7 @@ def export(run_dir: Path, out: Path, which: str = "best") -> dict[str, Any]:
         },
         "strength_db": cfg.target.strength_db,
         "duck_db": {k: v for k, v in duck.items() if k != "footsteps"},
+        "target": config_to_dict(cfg)["target"],
         "param_count": param_count(model),
         "features_fingerprint": ck["features_fingerprint"],
         "created": datetime.now(UTC).isoformat(timespec="seconds"),
