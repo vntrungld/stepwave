@@ -2,6 +2,7 @@
 
 pub mod erb;
 pub mod error;
+pub mod mask;
 pub mod profile;
 pub mod smoother;
 pub mod stft;
