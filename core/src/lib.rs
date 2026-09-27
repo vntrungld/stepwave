@@ -2,6 +2,8 @@
 
 pub mod error;
 pub mod profile;
+pub mod stft;
+pub mod testing;
 
 pub use error::CoreError;
 pub use profile::Profile;
