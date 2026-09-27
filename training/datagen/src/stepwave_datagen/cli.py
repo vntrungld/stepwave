@@ -142,3 +142,28 @@ def mix(
             raise typer.Exit(1)
 
     run(body)
+
+
+@app.command()
+def stats(
+    name: str = typer.Argument(..., help="dataset name"),
+    data_dir: Path = typer.Option(DATA_DIR),
+) -> None:
+    """Write sets/<name>/report/ and fail on holdout leaks or stem-sum mismatches."""
+    from .stats import compute_stats
+
+    def body() -> None:
+        set_dir = data_dir / "sets" / name
+        if not (set_dir / "manifest.json").is_file():
+            raise DatagenError(f"{set_dir} has no manifest.json; run `datagen mix {name}` first")
+        result = compute_stats(set_dir)
+        typer.echo(f"report: {result.report}")
+        if result.leaks or result.sum_failures:
+            typer.echo(
+                f"problems: {len(result.leaks)} leaking clips, "
+                f"{len(result.sum_failures)} stem-sum failures",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+    run(body)
