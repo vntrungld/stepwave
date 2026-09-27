@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -40,3 +41,18 @@ def version() -> None:
     import torch
 
     typer.echo(f"stepwave-model {package_version('stepwave-model')}, torch {torch.__version__}")
+
+
+@app.command()
+def prep(
+    set_name: str = typer.Argument(..., help="set name under <data-dir>/sets"),
+    data_dir: Path = typer.Option(DATA_DIR),
+    out: Path | None = typer.Option(None, help="default <data-dir>/features/<set>"),
+    workers: int = typer.Option(os.cpu_count() or 1),
+    force: bool = typer.Option(False, "--force", help="rebuild every split"),
+) -> None:
+    """Band energies of every clip (mix + stems) → <data-dir>/features/<set>."""
+    from .prep import prep_set
+
+    path = run(lambda: prep_set(data_dir, set_name, out, workers, force, log=typer.echo))
+    typer.echo(f"features: {path}")
