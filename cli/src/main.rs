@@ -1,4 +1,4 @@
-//! Offline stepwave processing: `stepwave-cli in.wav out.wav --profile cs2`.
+//! Offline stepwave processing: `stepwave-cli in.wav out.wav --profile cs2 --mode auto`.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -7,7 +7,19 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use stepwave_core::mask::UnityMask;
 use stepwave_core::stft::{HOP, SAMPLE_RATE};
-use stepwave_core::{Processor, Profile};
+use stepwave_core::{Processor, Profile, SwmModel};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum Mode {
+    /// Use the profile's model if it loads, else the static EQ (with a warning)
+    Auto,
+    /// Use the model; fail if it cannot be loaded
+    Model,
+    /// Use the profile's static EQ
+    Eq,
+    /// Unity mask, for A/B listening
+    Bypass,
+}
 
 #[derive(Parser)]
 #[command(
@@ -23,8 +35,14 @@ struct Args {
     /// Profile id (looked up as profiles/<id>.json) or a path to a profile JSON
     #[arg(long)]
     profile: String,
-    /// Run the pipeline with a unity mask, for A/B listening
+    /// Processing mode (default: auto)
+    #[arg(long, value_enum)]
+    mode: Option<Mode>,
+    /// Model file (default: the profile's `model`, relative to the profile's repo root)
     #[arg(long)]
+    model: Option<PathBuf>,
+    /// Same as `--mode bypass`
+    #[arg(long, conflicts_with = "mode")]
     bypass: bool,
 }
 
@@ -41,11 +59,13 @@ fn main() -> Result<()> {
     let len = left.len();
     let peak_in = peak_dbfs(left.iter().chain(&right));
 
-    let mut processor = if args.bypass {
-        Processor::with_mask(Box::new(UnityMask), SAMPLE_RATE)?
+    let mode = if args.bypass {
+        Mode::Bypass
     } else {
-        Processor::new(&profile, SAMPLE_RATE)?
+        args.mode.unwrap_or(Mode::Auto)
     };
+    let model_path = resolve_model(args.model.as_deref(), &profile, &profile_path);
+    let (mut processor, used) = build_processor(mode, &profile, &model_path)?;
 
     // Feed `latency` samples of silence so the tail comes out, then drop the head.
     let latency = processor.latency_samples();
@@ -66,6 +86,7 @@ fn main() -> Result<()> {
         "{:.1} µs per 10 ms frame ({frames} frames)",
         elapsed.as_secs_f64() * 1e6 / frames as f64
     );
+    println!("mode: {used}");
     Ok(())
 }
 
@@ -76,6 +97,59 @@ fn resolve_profile(arg: &str) -> PathBuf {
     } else {
         Path::new("profiles").join(format!("{arg}.json"))
     }
+}
+
+/// A relative `model` in a profile resolves against the parent of the profile's directory
+/// (`<root>/profiles/x.json` → `<root>/<model>`).
+fn resolve_model(arg: Option<&Path>, profile: &Profile, profile_path: &Path) -> PathBuf {
+    if let Some(path) = arg {
+        return path.to_path_buf();
+    }
+    let model = Path::new(&profile.model);
+    if model.is_absolute() {
+        return model.to_path_buf();
+    }
+    let root = profile_path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    root.join(model)
+}
+
+fn build_processor(
+    mode: Mode,
+    profile: &Profile,
+    model_path: &Path,
+) -> Result<(Processor, &'static str)> {
+    let eq = || Processor::new(profile, SAMPLE_RATE);
+    Ok(match mode {
+        Mode::Bypass => (
+            Processor::with_mask(Box::new(UnityMask), SAMPLE_RATE)?,
+            "bypass",
+        ),
+        Mode::Eq => (eq()?, "eq"),
+        Mode::Model => {
+            let model = SwmModel::load(model_path)
+                .with_context(|| format!("loading model {}", model_path.display()))?;
+            (
+                Processor::with_model(profile, &model, SAMPLE_RATE)?,
+                "model",
+            )
+        }
+        Mode::Auto => match SwmModel::load(model_path) {
+            Ok(model) => (
+                Processor::with_model(profile, &model, SAMPLE_RATE)?,
+                "model",
+            ),
+            Err(err) => {
+                eprintln!(
+                    "warning: model {} unusable ({err}); using static EQ",
+                    model_path.display()
+                );
+                (eq()?, "eq")
+            }
+        },
+    })
 }
 
 fn read_wav(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {

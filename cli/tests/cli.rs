@@ -167,6 +167,147 @@ fn reports_input_peak_not_processed_output_peak() {
     );
 }
 
+const FIXTURE_MODEL: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../core/tests/fixtures/model_random.swm"
+);
+
+fn mode_line(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find(|l| l.starts_with("mode: "))
+        .unwrap_or_else(|| panic!("no mode line: {:?}", String::from_utf8_lossy(&out.stdout)))
+        .to_string()
+}
+
+fn wav_pair() -> (tempfile::TempDir, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.wav");
+    write_wav(&input, 2, 48_000, 16, 48_000);
+    let output = dir.path().join("out.wav");
+    let (i, o) = (
+        input.to_str().unwrap().to_string(),
+        output.to_str().unwrap().to_string(),
+    );
+    (dir, i, o)
+}
+
+#[test]
+fn auto_without_model_falls_back_to_eq() {
+    let (dir, i, o) = wav_pair();
+    let missing = dir.path().join("missing.swm");
+    let out = run(&[
+        &i,
+        &o,
+        "--profile",
+        "cs2",
+        "--model",
+        missing.to_str().unwrap(),
+    ]);
+    assert_ok(&out);
+    assert_eq!(mode_line(&out), "mode: eq");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: model") && stderr.contains("using static EQ"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn auto_falls_back_on_corrupt_model() {
+    let (dir, i, o) = wav_pair();
+    let corrupt = dir.path().join("corrupt.swm");
+    std::fs::write(&corrupt, b"SWM1garbage").unwrap();
+    let out = run(&[
+        &i,
+        &o,
+        "--profile",
+        "cs2",
+        "--model",
+        corrupt.to_str().unwrap(),
+    ]);
+    assert_ok(&out);
+    assert_eq!(mode_line(&out), "mode: eq");
+}
+
+#[test]
+fn auto_uses_a_valid_model() {
+    let (_dir, i, o) = wav_pair();
+    let out = run(&[&i, &o, "--profile", "cs2", "--model", FIXTURE_MODEL]);
+    assert_ok(&out);
+    assert_eq!(mode_line(&out), "mode: model");
+}
+
+#[test]
+fn mode_model_requires_a_usable_model() {
+    let (dir, i, o) = wav_pair();
+    let missing = dir.path().join("missing.swm");
+    let bad = run(&[
+        &i,
+        &o,
+        "--profile",
+        "cs2",
+        "--mode",
+        "model",
+        "--model",
+        missing.to_str().unwrap(),
+    ]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("missing.swm"));
+    let ok = run(&[
+        &i,
+        &o,
+        "--profile",
+        "cs2",
+        "--mode",
+        "model",
+        "--model",
+        FIXTURE_MODEL,
+    ]);
+    assert_ok(&ok);
+    assert_eq!(mode_line(&ok), "mode: model");
+}
+
+#[test]
+fn eq_and_bypass_modes() {
+    let (_dir, i, o) = wav_pair();
+    let eq = run(&[&i, &o, "--profile", "cs2", "--mode", "eq"]);
+    assert_ok(&eq);
+    assert_eq!(mode_line(&eq), "mode: eq");
+    let by = run(&[&i, &o, "--profile", "cs2", "--mode", "bypass"]);
+    assert_eq!(mode_line(&by), "mode: bypass");
+    let alias = run(&[&i, &o, "--profile", "cs2", "--bypass"]);
+    assert_eq!(mode_line(&alias), "mode: bypass");
+    let clash = run(&[&i, &o, "--profile", "cs2", "--bypass", "--mode", "eq"]);
+    assert!(!clash.status.success());
+}
+
+#[test]
+fn model_path_resolves_relative_to_profile() {
+    // A profile outside the repo whose `model` is relative: resolved against the parent of
+    // the profile's directory, not the current directory.
+    let (dir, i, o) = wav_pair();
+    let root = dir.path().join("pack");
+    std::fs::create_dir_all(root.join("profiles")).unwrap();
+    std::fs::create_dir_all(root.join("models")).unwrap();
+    std::fs::copy(FIXTURE_MODEL, root.join("models/test.swm")).unwrap();
+    let cs2 = std::fs::read_to_string(CS2)
+        .unwrap()
+        .replace("models/cs2.swm", "models/test.swm");
+    let profile = root.join("profiles/test.json");
+    std::fs::write(&profile, cs2).unwrap();
+    let out = run(&[
+        &i,
+        &o,
+        "--profile",
+        profile.to_str().unwrap(),
+        "--mode",
+        "model",
+    ]);
+    assert_ok(&out);
+    assert_eq!(mode_line(&out), "mode: model");
+}
+
 #[test]
 fn missing_profile_names_the_path() {
     let dir = tempfile::tempdir().unwrap();
