@@ -90,3 +90,22 @@ def catalog(
         )
 
     run(body)
+
+
+@app.command()
+def hrtf(data_dir: Path = typer.Option(DATA_DIR), config: Path = typer.Option(CONFIG)) -> None:
+    """Download the configured SOFA HRTF into <data-dir>/hrtf and check it loads."""
+    from .config import load_config
+    from .hrtf import download, load_sofa
+
+    def body() -> None:
+        cfg = load_config(config)
+        dest = data_dir / "hrtf" / cfg.hrtf.file
+        fetched = download(cfg.hrtf.url, dest)
+        h = load_sofa(dest)
+        typer.echo(
+            f"{'downloaded' if fetched else 'already present'}: {dest} "
+            f"({h.ir.shape[0]} directions, {h.ir.shape[2]} taps at 48 kHz)"
+        )
+
+    run(body)
