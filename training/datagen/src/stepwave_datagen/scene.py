@@ -64,7 +64,10 @@ def make_pools(
     split: str,
     holdout_maps: tuple[str, ...],
     holdout_surfaces: tuple[str, ...],
+    layer_surfaces: tuple[str, ...],
 ) -> Pools:
+    """Per-split source pools. `layer_surfaces` are footstep layers the game plays on top of
+    every step (not surfaces of their own); they are left out of the footstep pools."""
     if split not in ("train", "val"):
         raise DatagenError(f"unknown split {split!r}; expected 'train' or 'val'")
     if split == "val" and (not holdout_maps or not holdout_surfaces):
@@ -77,15 +80,20 @@ def make_pools(
         if name not in maps:
             raise DatagenError(f"holdout map {name!r} has no ambience files; known: {sorted(maps)}")
     for name in holdout_surfaces:
+        if name in layer_surfaces:
+            raise DatagenError(
+                f"holdout surface {name!r} is listed in split.layer_surfaces; layers are never "
+                f"sampled, so pick a real surface as the holdout"
+            )
         if name not in surfaces:
             raise DatagenError(
                 f"holdout surface {name!r} has no footstep files; known: {sorted(surfaces)}"
             )
     val = split == "val"
-    hm, hs = set(holdout_maps), set(holdout_surfaces)
+    hm, hs, layers = set(holdout_maps), set(holdout_surfaces), set(layer_surfaces)
     footsteps: dict[str, list[CatalogEntry]] = {}
     for e in entries:
-        if e.cls == "footsteps" and (e.surface in hs) == val:
+        if e.cls == "footsteps" and e.surface not in layers and (e.surface in hs) == val:
             footsteps.setdefault(e.surface, []).append(e)
     pools = Pools(
         footsteps=footsteps,

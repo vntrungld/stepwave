@@ -17,6 +17,7 @@ def test_default_config_loads_with_tuples() -> None:
     assert cfg.scene.footstep_sequences == (1, 3)
     assert cfg.bus.loudness_rms_dbfs == (-35.0, -15.0)
     assert cfg.split.holdout_maps == ("overpass",)
+    assert cfg.split.layer_surfaces == ("bass", "suit")
     assert cfg.hrtf.file.endswith(".sofa")
 
 

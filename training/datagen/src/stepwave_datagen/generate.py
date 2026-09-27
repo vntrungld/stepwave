@@ -18,7 +18,7 @@ import soundfile as sf
 from tqdm import tqdm
 
 from .bus import apply_bus
-from .catalog import catalog_sha256, processed_path, read_catalog
+from .catalog import CatalogEntry, catalog_sha256, processed_path, read_catalog
 from .config import Config, config_to_dict
 from .errors import DatagenError
 from .hrtf import Hrtf, load_sofa
@@ -103,6 +103,11 @@ def _final_snr_db(stems: dict[str, np.ndarray], target: float | None) -> float |
 _STATE: dict[str, Any] = {}
 
 
+def _pools(entries: list[CatalogEntry], split: str, cfg: Config) -> Pools:
+    s = cfg.split
+    return make_pools(entries, split, s.holdout_maps, s.holdout_surfaces, s.layer_surfaces)
+
+
 def split_fingerprint(cfg: Config, catalog_sha: str, seed: int, clips: int) -> str:
     """Identity of everything that determines a split's clips (the set name aside)."""
     payload = {
@@ -139,7 +144,7 @@ def _init(
 ) -> None:
     entries = read_catalog(data_dir / "catalog.csv")
     _STATE.update(
-        pools=make_pools(entries, split, cfg.split.holdout_maps, cfg.split.holdout_surfaces),
+        pools=_pools(entries, split, cfg),
         hrtf=load_sofa(data_dir / "hrtf" / cfg.hrtf.file),
         load=AudioLoader(data_dir / "raw"),
         cfg=cfg,
@@ -219,7 +224,7 @@ def generate(
     if not (data_dir / "hrtf" / cfg.hrtf.file).is_file():
         raise DatagenError("HRTF not found; run `datagen hrtf` first")
     # Validate pools in the main process so configuration errors surface once, clearly.
-    make_pools(read_catalog(catalog), split, cfg.split.holdout_maps, cfg.split.holdout_surfaces)
+    _pools(read_catalog(catalog), split, cfg)
 
     clips = max(1, round(hours * 3600 / cfg.scene.clip_seconds))
     fingerprint = split_fingerprint(cfg, catalog_sha256(catalog), seed, clips)

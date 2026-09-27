@@ -31,7 +31,7 @@ def tiny(tmp_path: Path):
 
 def test_make_clip_is_deterministic(tiny) -> None:
     data, cfg = tiny
-    pools = make_pools(read_catalog(data / "catalog.csv"), "train", ("mirage",), ("wood",))
+    pools = make_pools(read_catalog(data / "catalog.csv"), "train", ("mirage",), ("wood",), ())
     hrtf = load_sofa(data / "hrtf" / cfg.hrtf.file)
     load = AudioLoader(data / "raw")
     a = make_clip(pools, load, hrtf, cfg, 123, "train-000000", "train", "s")

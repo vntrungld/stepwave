@@ -21,13 +21,16 @@ ENTRIES = [
     entry("f/concrete/1.wav", "footsteps", surface="concrete"),
     entry("f/concrete/2.wav", "footsteps", surface="concrete"),
     entry("f/wood/1.wav", "footsteps", surface="wood"),
+    entry("f/bass/1.wav", "footsteps", surface="bass"),
+    entry("f/suit/1.wav", "footsteps", surface="suit"),
     entry("a/dust2.wav", "ambience", map_="dust2", dur=5.0),
     entry("a/mirage.wav", "ambience", map_="mirage", dur=5.0),
     entry("g/ak.wav", "gunfire"),
     entry("e/he.wav", "explosions", dur=1.0),
     entry("o/ui.wav", "other"),
 ]
-HOLD = (("mirage",), ("wood",))
+LAYERS = ("bass", "suit")
+HOLD = (("mirage",), ("wood",), LAYERS)
 
 
 def scene(seed: int, split: str = "train"):
@@ -98,12 +101,25 @@ def test_val_uses_only_holdouts_for_steps_and_ambience() -> None:
 
 def test_val_requires_holdouts() -> None:
     with pytest.raises(DatagenError, match="holdout"):
-        make_pools(ENTRIES, "val", (), ())
+        make_pools(ENTRIES, "val", (), (), LAYERS)
 
 
 def test_unknown_holdout_is_rejected() -> None:
     with pytest.raises(DatagenError, match="mirgae"):
-        make_pools(ENTRIES, "train", ("mirgae",), ("wood",))
+        make_pools(ENTRIES, "train", ("mirgae",), ("wood",), LAYERS)
+
+
+@pytest.mark.parametrize("split", ["train", "val"])
+def test_layer_surfaces_are_never_sampled_as_surfaces(split: str) -> None:
+    pools = make_pools(ENTRIES, split, *HOLD)
+    assert not set(pools.footsteps) & set(LAYERS)
+    for s in (scene(i, split) for i in range(200)):
+        assert not any(e.cls == "footsteps" and e.surface in LAYERS for e in s.events)
+
+
+def test_holdout_naming_a_layer_is_rejected() -> None:
+    with pytest.raises(DatagenError, match="layer"):
+        make_pools(ENTRIES, "train", ("mirage",), ("suit",), LAYERS)
 
 
 def test_empty_required_class_is_named() -> None:

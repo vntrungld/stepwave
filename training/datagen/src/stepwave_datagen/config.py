@@ -24,6 +24,7 @@ class HrtfConfig:
 class SplitConfig:
     holdout_maps: tuple[str, ...]
     holdout_surfaces: tuple[str, ...]
+    layer_surfaces: tuple[str, ...]
     train_hours: float
     val_hours: float
 

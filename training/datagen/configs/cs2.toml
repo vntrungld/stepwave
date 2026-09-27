@@ -10,6 +10,9 @@ file = "mit_kemar_normal_pinna.sofa"
 # (common, cache, nuke / land, water) and val still has variety.
 holdout_maps = ["overpass"]  # 39 ambience files
 holdout_surfaces = ["tile"]  # 14 footstep files
+# Layers CS2 plays on top of every step (low-end thump, gear rustle), not surfaces of
+# their own: never sampled as a footstep surface and never a holdout.
+layer_surfaces = ["bass", "suit"]
 train_hours = 50.0
 val_hours = 5.0
 
