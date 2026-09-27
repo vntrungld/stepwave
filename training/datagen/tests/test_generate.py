@@ -40,6 +40,25 @@ def test_make_clip_is_deterministic(tiny) -> None:
     assert a[2]["split"] == "train" and a[2]["set"] == "s"
 
 
+def test_audio_loader_cache_is_bounded_by_bytes(tmp_path: Path) -> None:
+    import soundfile as sf
+
+    from stepwave_datagen.catalog import processed_path
+
+    sizes = {"a.wav": 1000, "b.wav": 3000, "c.wav": 2000, "big.wav": 20_000}
+    for rel, n in sizes.items():
+        out = processed_path(tmp_path, rel)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(out, np.zeros(n, np.float32), 48_000, subtype="PCM_24", format="FLAC")
+    load = AudioLoader(tmp_path, max_bytes=5 * 4000)  # float32: 4 bytes/sample
+    for rel in ["a.wav", "b.wav", "c.wav", "a.wav", "big.wav", "c.wav", "b.wav", "a.wav"]:
+        assert load(rel).shape == (sizes[rel],)
+        assert load.cached_bytes <= load.max_bytes
+        assert load.cached_bytes == sum(x.nbytes for x in load._cache.values())
+    assert "big.wav" not in load._cache  # larger than the cap: returned, never cached
+    assert list(load._cache) == ["b.wav", "a.wav"]  # LRU order after evictions
+
+
 def test_generate_writes_valid_clips(tiny) -> None:
     data, cfg = tiny
     result = generate(data, "s", "train", HOURS_5_CLIPS, 1, cfg, workers=1)

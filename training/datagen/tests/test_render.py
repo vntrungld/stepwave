@@ -116,6 +116,44 @@ def test_long_event_is_truncated_to_clip(hrtf) -> None:
     assert np.abs(stems["other"][:, : int(1.4 * SR)]).max() == 0
 
 
+def test_sources_are_truncated_before_filtering(hrtf, monkeypatch) -> None:
+    import stepwave_datagen.render as render
+
+    lengths: list[int] = []
+    real_lowpass, real_conv = render._lowpass, render.fftconvolve
+
+    def spy_lowpass(x, cutoff, cfg):
+        lengths.append(len(x))
+        return real_lowpass(x, cutoff, cfg)
+
+    def spy_conv(a, b, *args, **kwargs):
+        if a.ndim == 1 and len(b) <= 64:  # the HRTF convolution, not the reverb send
+            lengths.append(len(a))
+        return real_conv(a, b, *args, **kwargs)
+
+    monkeypatch.setattr(render, "_lowpass", spy_lowpass)
+    monkeypatch.setattr(render, "fftconvolve", spy_conv)
+    onset = 1.5
+    render_stems(
+        scn([ev("long", "other", onset=onset, dist=30.0), ev("long", "gunfire", spatial=False)]),
+        SOURCES.__getitem__,
+        hrtf,
+        CFG.render,
+    )
+    assert lengths and max(lengths) <= 2 * SR - int(0.1 * SR)
+    assert int(round(onset * SR)) + min(lengths) <= 2 * SR
+
+
+def test_truncation_matches_rendering_a_pre_cut_source(hrtf) -> None:
+    onset = 1.5
+    cut = {"cut": SOURCES["long"][: 2 * SR - int(round(onset * SR))]}
+    events = [ev("long", "other", onset=onset, dist=30.0, wet=0.2)]
+    full = render_stems(scn(events), SOURCES.__getitem__, hrtf, CFG.render)
+    events = [ev("cut", "other", onset=onset, dist=30.0, wet=0.2)]
+    pre = render_stems(scn(events), cut.__getitem__, hrtf, CFG.render)
+    np.testing.assert_allclose(full["other"], pre["other"], atol=1e-6)
+
+
 def test_footstep_snr_matches_target(hrtf) -> None:
     events = [ev("amb", "ambience", onset=0.0), ev("step", "footsteps", onset=0.5, wet=0.2)]
     for snr in (-25.0, -10.0, 0.0):

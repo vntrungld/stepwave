@@ -28,11 +28,16 @@ from .writer import is_complete, write_clip
 
 
 class AudioLoader:
-    """Reads processed 48 kHz mono sources, keeping the most recent ones in memory."""
+    """Reads processed 48 kHz mono sources, keeping recently used ones in memory.
 
-    def __init__(self, raw_dir: Path, capacity: int = 2048) -> None:
+    The cache is bounded by decoded bytes (least recently used evicted first); a file
+    larger than `max_bytes` on its own is returned but not cached.
+    """
+
+    def __init__(self, raw_dir: Path, max_bytes: int = 512 * 1024 * 1024) -> None:
         self.raw_dir = raw_dir
-        self.capacity = capacity
+        self.max_bytes = max_bytes
+        self.cached_bytes = 0
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
 
     def __call__(self, rel: str) -> np.ndarray:
@@ -40,9 +45,13 @@ class AudioLoader:
             self._cache.move_to_end(rel)
             return self._cache[rel]
         data, _ = sf.read(processed_path(self.raw_dir, rel), dtype="float32")
+        if data.nbytes > self.max_bytes:
+            return data
+        while self._cache and self.cached_bytes + data.nbytes > self.max_bytes:
+            _, old = self._cache.popitem(last=False)
+            self.cached_bytes -= old.nbytes
         self._cache[rel] = data
-        if len(self._cache) > self.capacity:
-            self._cache.popitem(last=False)
+        self.cached_bytes += data.nbytes
         return data
 
 

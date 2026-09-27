@@ -65,17 +65,21 @@ def render_stems(
     dry = {c: np.zeros((2, n), np.float64) for c in CLASSES}
     send = {c: np.zeros((2, n), np.float64) for c in CLASSES}
     for ev in scene.events:
+        onset = int(round(ev.onset_s * SR))
+        if onset >= n:
+            continue
         x = np.asarray(load(ev.source), dtype=np.float32)
         if ev.cls == "ambience":
             idx = (int(ev.offset_s * SR) + np.arange(n)) % len(x)
             x = x[idx]
+        else:
+            x = x[: n - onset]  # nothing past the clip end is heard; skip filtering it
         x = _lowpass(x * distance_gain(ev.distance_m), lpf_cutoff_hz(ev.distance_m, cfg), cfg)
         if ev.spatial:
             h = hrtf.nearest(ev.azimuth_deg, ev.elevation_deg)
             y = np.stack([fftconvolve(x, h[0]), fftconvolve(x, h[1])])
         else:
             y = np.stack([x, x])
-        onset = int(round(ev.onset_s * SR))
         _place(dry[ev.cls], (1.0 - ev.wet) * y, onset)
         if ev.wet > 0.0:
             _place(send[ev.cls], ev.wet * y, onset)
