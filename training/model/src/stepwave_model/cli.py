@@ -100,6 +100,7 @@ def eval_cmd(
     config: Path = typer.Option(CONFIG),
     profile: Path = typer.Option(Path("profiles/cs2.json")),
     workers: int = typer.Option(os.cpu_count() or 1),
+    real: Path | None = typer.Option(None, help="real recordings dir (default <data-dir>/real)"),
 ) -> None:
     """Metrics (off / static EQ / model) on the val set, plus listening files."""
     from .config import load_config
@@ -117,6 +118,7 @@ def eval_cmd(
             profile,
             workers,
             label=str(swm),
+            real_dir=real or data_dir / "real",
             log=typer.echo,
         )
 

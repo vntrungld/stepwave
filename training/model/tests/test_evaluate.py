@@ -40,7 +40,7 @@ def test_stub_boost_is_measured(tmp_path: Path) -> None:
     cfg = load_config(CONFIG_PATH)
     out = tmp_path / "eval"
     m = evaluate(stub_gains, feats, tmp_path / "sets/t", out, cfg, PROFILE, log=quiet)
-    assert set(m) == set(MODES)
+    assert set(m) == {*MODES, "real"}
     assert abs(m["model"]["footstep_gain_db"] - 6.0) < 1.0
     assert m["model"]["snr_improvement_db"] > 0.0
     assert m["model"]["false_boost_pct"] == 0.0
