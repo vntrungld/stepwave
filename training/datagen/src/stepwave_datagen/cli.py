@@ -46,3 +46,23 @@ def version() -> None:
         f"stepwave-datagen {package_version('stepwave-datagen')}, "
         f"stepwave_py sample rate {stepwave_py.SAMPLE_RATE}"
     )
+
+
+@app.command()
+def extract(
+    vpk: Path | None = typer.Option(None, help="pak01_dir.vpk (default: config 'vpk')"),
+    cli: Path | None = typer.Option(None, help="Source2Viewer-CLI binary"),
+    data_dir: Path = typer.Option(DATA_DIR),
+    config: Path = typer.Option(CONFIG),
+) -> None:
+    """Export CS2 sounds/ from the VPK into <data-dir>/raw."""
+    from . import extract as ex
+    from .config import load_config
+
+    def body() -> None:
+        vpk_path = vpk or Path(load_config(config).vpk).expanduser()
+        tool = ex.find_cli(cli, data_dir / "tools")
+        ran = ex.extract(vpk_path, data_dir / "raw", tool)
+        typer.echo("extracted" if ran else "raw/ is up to date with the VPK; nothing to do")
+
+    run(body)
