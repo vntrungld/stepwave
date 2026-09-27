@@ -54,12 +54,16 @@ def load_rules(path: Path) -> list[Rule]:
         data = tomllib.loads(path.read_text())
     except FileNotFoundError as err:
         raise DatagenError(f"rules file not found: {path}") from err
+    except tomllib.TOMLDecodeError as err:
+        raise DatagenError(f"{path}: invalid TOML ({err}); fix the syntax and re-run") from err
     rules = []
     for i, entry in enumerate(data.get("rule", [])):
         cls = entry.get("class")
         if cls not in CLASSES:
             raise DatagenError(f"{path}: rule {i} has class {cls!r}; expected one of {CLASSES}")
-        pattern = entry["pattern"]
+        pattern = entry.get("pattern")
+        if not pattern:
+            raise DatagenError(f"{path}: rule {i} has no 'pattern'")
         rules.append(Rule(pattern, cls, entry.get("surface"), entry.get("map"), _compile(pattern)))
     return rules
 

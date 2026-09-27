@@ -67,3 +67,17 @@ def test_unknown_class_rejected(tmp_path: Path) -> None:
     path.write_text('[[rule]]\npattern = "a/**"\nclass = "music"\n')
     with pytest.raises(DatagenError, match="music"):
         load_rules(path)
+
+
+def test_rule_without_pattern_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "bad.toml"
+    path.write_text('[[rule]]\nclass = "footsteps"\n')
+    with pytest.raises(DatagenError, match="pattern"):
+        load_rules(path)
+
+
+def test_invalid_toml_is_a_datagen_error(tmp_path: Path) -> None:
+    path = tmp_path / "bad.toml"
+    path.write_text("[[rule]\npattern = 'a/**'\n")
+    with pytest.raises(DatagenError, match="invalid TOML"):
+        load_rules(path)

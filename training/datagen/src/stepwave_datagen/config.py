@@ -91,6 +91,8 @@ def load_config(path: Path) -> Config:
         data = tomllib.loads(path.read_text())
     except FileNotFoundError as err:
         raise DatagenError(f"config file not found: {path}") from err
+    except tomllib.TOMLDecodeError as err:
+        raise DatagenError(f"{path}: invalid TOML ({err}); fix the syntax and re-run") from err
     if "vpk" not in data:
         raise DatagenError("config: missing key 'vpk'")
     sections = {

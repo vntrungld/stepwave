@@ -30,3 +30,10 @@ def test_missing_key_is_a_datagen_error(tmp_path: Path) -> None:
     bad.write_text(DEFAULT.read_text().replace("ratio = 3.0\n", ""))
     with pytest.raises(DatagenError, match="ratio"):
         load_config(bad)
+
+
+def test_invalid_toml_is_a_datagen_error(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.toml"
+    bad.write_text("vpk = [unterminated")
+    with pytest.raises(DatagenError, match="invalid TOML"):
+        load_config(bad)
