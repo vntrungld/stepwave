@@ -8,6 +8,17 @@ const REPO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
 const CS2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../profiles/cs2.json");
 
 fn write_wav(path: &Path, channels: u16, sample_rate: u32, bits: u16, frames: usize) {
+    write_wav_amplitude(path, channels, sample_rate, bits, frames, 0.3);
+}
+
+fn write_wav_amplitude(
+    path: &Path,
+    channels: u16,
+    sample_rate: u32,
+    bits: u16,
+    frames: usize,
+    amplitude: f32,
+) {
     let spec = hound::WavSpec {
         channels,
         sample_rate,
@@ -16,10 +27,24 @@ fn write_wav(path: &Path, channels: u16, sample_rate: u32, bits: u16, frames: us
     };
     let mut w = hound::WavWriter::create(path, spec).unwrap();
     let scale = ((1i64 << (bits - 1)) - 1) as f32;
-    for s in white_noise(5, frames * channels as usize, 0.3) {
+    for s in white_noise(5, frames * channels as usize, amplitude) {
         w.write_sample((s * scale) as i32).unwrap();
     }
     w.finalize().unwrap();
+}
+
+/// Parses "peak in X dBFS, out Y dBFS" from stdout, returning (X, Y).
+fn parse_peaks(stdout: &str) -> (f32, f32) {
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("peak in"))
+        .unwrap_or_else(|| panic!("no peak line in stdout: {stdout:?}"));
+    let nums: Vec<f32> = line
+        .split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().unwrap())
+        .collect();
+    (nums[0], nums[1])
 }
 
 fn run(args: &[&str]) -> Output {
@@ -117,6 +142,29 @@ fn rejects_44_1_khz_input() {
     let out = run(&[i.to_str().unwrap(), o.to_str().unwrap(), "--profile", "cs2"]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("48000"));
+}
+
+#[test]
+fn reports_input_peak_not_processed_output_peak() {
+    // A near-full-scale input (peak ~0 dBFS) run through the cs2 profile: the
+    // profile's fallback EQ + preamp never boosts a band above 0 dB, so the
+    // processed output is measurably quieter than the input. `peak in` must
+    // reflect the *original* samples, not the buffer after `Processor::process`
+    // has overwritten it in place.
+    let dir = tempfile::tempdir().unwrap();
+    let (i, o) = (dir.path().join("in.wav"), dir.path().join("out.wav"));
+    write_wav_amplitude(&i, 2, 48_000, 16, 4_800, 0.9999);
+    let out = run(&[i.to_str().unwrap(), o.to_str().unwrap(), "--profile", "cs2"]);
+    assert_ok(&out);
+    let (peak_in, peak_out) = parse_peaks(&String::from_utf8_lossy(&out.stdout));
+    assert!(
+        peak_in > -0.5,
+        "peak in should be near 0 dBFS, got {peak_in}"
+    );
+    assert!(
+        peak_out <= -1.0,
+        "peak out should be attenuated by the profile, got {peak_out}"
+    );
 }
 
 #[test]

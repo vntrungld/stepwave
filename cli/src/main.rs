@@ -39,6 +39,7 @@ fn main() -> Result<()> {
 
     let (mut left, mut right) = read_wav(&args.input)?;
     let len = left.len();
+    let peak_in = peak_dbfs(left.iter().chain(&right));
 
     let mut processor = if args.bypass {
         Processor::with_mask(Box::new(UnityMask), SAMPLE_RATE)?
@@ -59,23 +60,8 @@ fn main() -> Result<()> {
     write_wav(&args.output, &left[latency..], &right[latency..])?;
 
     let frames = ((len + latency) / HOP).max(1);
-    println!(
-        "peak in {:.1} dBFS, out {:.1} dBFS",
-        peak_dbfs(
-            &left[..len]
-                .iter()
-                .chain(&right[..len])
-                .copied()
-                .collect::<Vec<_>>()
-        ),
-        peak_dbfs(
-            &left[latency..]
-                .iter()
-                .chain(&right[latency..])
-                .copied()
-                .collect::<Vec<_>>()
-        ),
-    );
+    let peak_out = peak_dbfs(left[latency..].iter().chain(&right[latency..]));
+    println!("peak in {peak_in:.1} dBFS, out {peak_out:.1} dBFS");
     println!(
         "{:.1} µs per 10 ms frame ({frames} frames)",
         elapsed.as_secs_f64() * 1e6 / frames as f64
@@ -104,13 +90,17 @@ fn read_wav(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
         );
     }
     let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<_, _>>()
+            .with_context(|| format!("reading samples from {}", path.display()))?,
         hound::SampleFormat::Int => {
             let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .samples::<i32>()
                 .map(|s| s.map(|v| v as f32 * scale))
-                .collect::<Result<_, _>>()?
+                .collect::<Result<_, _>>()
+                .with_context(|| format!("reading samples from {}", path.display()))?
         }
     };
     match spec.channels {
@@ -138,13 +128,19 @@ fn write_wav(path: &Path, left: &[f32], right: &[f32]) -> Result<()> {
     let mut writer = hound::WavWriter::create(path, spec)
         .with_context(|| format!("creating {}", path.display()))?;
     for (&l, &r) in left.iter().zip(right) {
-        writer.write_sample(l)?;
-        writer.write_sample(r)?;
+        writer
+            .write_sample(l)
+            .with_context(|| format!("writing samples to {}", path.display()))?;
+        writer
+            .write_sample(r)
+            .with_context(|| format!("writing samples to {}", path.display()))?;
     }
-    writer.finalize()?;
+    writer
+        .finalize()
+        .with_context(|| format!("finalizing {}", path.display()))?;
     Ok(())
 }
 
-fn peak_dbfs(x: &[f32]) -> f32 {
-    20.0 * x.iter().fold(0.0f32, |m, v| m.max(v.abs())).log10()
+fn peak_dbfs<'a>(x: impl Iterator<Item = &'a f32>) -> f32 {
+    20.0 * x.fold(0.0f32, |m, v| m.max(v.abs())).log10()
 }
