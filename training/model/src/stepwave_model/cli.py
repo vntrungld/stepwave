@@ -88,3 +88,40 @@ def export_cmd(
 
     header = run(lambda: export(run_dir, out, which))
     typer.echo(f"{out}: {header['param_count']} params, epoch {header['source']['epoch']}")
+
+
+@app.command("eval")
+def eval_cmd(
+    swm: Path = typer.Argument(..., help=".swm file from `trainer export`"),
+    set_name: str = typer.Option("cs2", "--set", help="set name under <data-dir>/sets"),
+    data_dir: Path = typer.Option(DATA_DIR),
+    features: Path | None = typer.Option(None, help="default <data-dir>/features/<set>"),
+    out: Path | None = typer.Option(None, help="default <data-dir>/eval/<swm stem>"),
+    config: Path = typer.Option(CONFIG),
+    profile: Path = typer.Option(Path("profiles/cs2.json")),
+    workers: int = typer.Option(os.cpu_count() or 1),
+) -> None:
+    """Metrics (off / static EQ / model) on the val set, plus listening files."""
+    from .config import load_config
+    from .evaluate import ModelGains, evaluate
+    from .swm import read_swm
+
+    def body() -> dict:
+        read_swm(swm)  # fail fast on a bad file
+        return evaluate(
+            ModelGains(swm),
+            features or data_dir / "features" / set_name,
+            data_dir / "sets" / set_name,
+            out or data_dir / "eval" / swm.stem,
+            load_config(config),
+            profile,
+            workers,
+            label=str(swm),
+            log=typer.echo,
+        )
+
+    m = run(body)["model"]
+    typer.echo(
+        f"model: footsteps {m['footstep_gain_db']:+.2f} dB, "
+        f"SNR {m['snr_improvement_db']:+.2f} dB, false-boost {m['false_boost_pct']:.2f}%"
+    )
