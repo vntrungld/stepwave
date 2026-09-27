@@ -62,6 +62,28 @@ def make_set(
     return root
 
 
+def write_run(run_dir: Path, seed: int = 0) -> Path:
+    """A run dir whose best.pt holds a randomly initialised model (no training)."""
+    import torch
+
+    from stepwave_model.config import config_to_dict, load_config
+    from stepwave_model.model import BandMaskNet
+
+    torch.manual_seed(seed)
+    cfg = load_config(CONFIG_PATH)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ck = {
+        "model": BandMaskNet(cfg.target.gain_db_range).state_dict(),
+        "config": config_to_dict(cfg),
+        "feature": {"mean": [-60.0] * 32, "std": [15.0] * 32},
+        "features_fingerprint": "f" * 16,
+        "epoch": 0,
+        "val_loss": 1.0,
+    }
+    torch.save(ck, run_dir / "best.pt")
+    return run_dir
+
+
 def prepped(tmp_path: Path, clips: dict[str, int] | None = None, seconds: float = 4.5) -> Path:
     """A tiny synthetic set run through prep; returns the features directory.
 

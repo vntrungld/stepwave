@@ -75,3 +75,16 @@ def train_cmd(
         return train(features, out, load_config(config), device, resume, max_steps, typer.echo)
 
     typer.echo(f"best checkpoint: {run(body)}")
+
+
+@app.command("export")
+def export_cmd(
+    run_dir: Path = typer.Argument(..., help="run directory from `trainer train`"),
+    out: Path = typer.Option(Path("models/cs2.swm")),
+    which: str = typer.Option("best", help="best or last checkpoint"),
+) -> None:
+    """Write the model as .swm v1 and check it against the numpy reference."""
+    from .export import export
+
+    header = run(lambda: export(run_dir, out, which))
+    typer.echo(f"{out}: {header['param_count']} params, epoch {header['source']['epoch']}")
