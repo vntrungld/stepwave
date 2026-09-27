@@ -121,8 +121,8 @@ def test_mix_command(tiny, tmp_path: Path) -> None:
     data, cfg = tiny
     cfg_file = tmp_path / "cfg.toml"
     text = CFG_PATH.read_text().replace("clip_seconds = 10.0", "clip_seconds = 2.0")
-    text = text.replace("holdout_maps = []", 'holdout_maps = ["mirage"]')
-    text = text.replace("holdout_surfaces = []", 'holdout_surfaces = ["wood"]')
+    text = text.replace('holdout_maps = ["overpass"]', 'holdout_maps = ["mirage"]')
+    text = text.replace('holdout_surfaces = ["tile"]', 'holdout_surfaces = ["wood"]')
     cfg_file.write_text(text)
     result = CliRunner().invoke(
         app,
