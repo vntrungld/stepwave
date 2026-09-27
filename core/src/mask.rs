@@ -54,6 +54,30 @@ impl MaskSource for StaticEqMask {
     }
 }
 
+/// Offline/test source: replays a precomputed gain sequence, one row per hop, then holds
+/// the last row (0 dB everywhere if the sequence is empty). The sequence is allocated by
+/// the caller; `next_mask` never allocates. Not meant for plugins.
+pub struct ExternalMask {
+    frames: Vec<[f32; NUM_BANDS]>,
+    next: usize,
+}
+
+impl ExternalMask {
+    pub fn new(frames: Vec<[f32; NUM_BANDS]>) -> Self {
+        Self { frames, next: 0 }
+    }
+}
+
+impl MaskSource for ExternalMask {
+    fn next_mask(&mut self, _mid_spectrum: &[Complex32], gains_db: &mut [f32; NUM_BANDS]) {
+        match self.frames.get(self.next).or(self.frames.last()) {
+            Some(row) => *gains_db = *row,
+            None => gains_db.fill(0.0),
+        }
+        self.next = self.next.saturating_add(1);
+    }
+}
+
 /// RBJ cookbook coefficients for one profile EQ band at 48 kHz.
 pub fn eq_coefficients(band: &EqBand) -> Result<Coefficients<f32>, CoreError> {
     let invalid = |e| CoreError::InvalidProfile(format!("fallback_eq {band:?}: {e:?}"));

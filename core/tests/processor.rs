@@ -1,7 +1,12 @@
+use std::sync::{Arc, Mutex};
+
 use approx::assert_abs_diff_eq;
-use stepwave_core::erb::NUM_BANDS;
+use stepwave_core::erb::{ErbBands, NUM_BANDS};
+use stepwave_core::features::FeatureExtractor;
 use stepwave_core::limiter::CEILING;
-use stepwave_core::mask::{eq_coefficients, magnitude_db, MaskSource, UnityMask};
+use stepwave_core::mask::{
+    eq_coefficients, magnitude_db, ExternalMask, MaskSource, StaticEqMask, UnityMask,
+};
 use stepwave_core::stft::{Complex32, WIN};
 use stepwave_core::testing::{db, rms, sine, white_noise};
 use stepwave_core::{CoreError, Processor, Profile};
@@ -183,4 +188,68 @@ fn nan_input_sample_stays_finite_and_output_resyncs_with_clean_run() {
             tail + i
         );
     }
+}
+
+#[test]
+fn external_mask_replays_static_eq_exactly() {
+    let profile = Profile::from_json(CS2).unwrap();
+    let eq = StaticEqMask::from_profile(&profile, &ErbBands::new()).unwrap();
+    let x = white_noise(3, 48_000, 0.2);
+    let frames = vec![*eq.gains_db(); x.len() / 480 + 4];
+    let mut ext = Processor::with_mask(Box::new(ExternalMask::new(frames)), 48_000).unwrap();
+    assert_eq!(run(&mut cs2(), &x, &x, 480), run(&mut ext, &x, &x, 480));
+}
+
+#[test]
+fn external_mask_holds_last_frame() {
+    let x = white_noise(4, 48_000, 0.1);
+    let one = vec![[6.0; NUM_BANDS]];
+    let many = vec![[6.0; NUM_BANDS]; x.len() / 480 + 4];
+    let mut a = Processor::with_mask(Box::new(ExternalMask::new(one)), 48_000).unwrap();
+    let mut b = Processor::with_mask(Box::new(ExternalMask::new(many)), 48_000).unwrap();
+    assert_eq!(run(&mut a, &x, &x, 480), run(&mut b, &x, &x, 480));
+}
+
+#[test]
+fn empty_external_mask_is_unity() {
+    let x = white_noise(5, 24_000, 0.3);
+    let mut e = Processor::with_mask(Box::new(ExternalMask::new(Vec::new())), 48_000).unwrap();
+    assert_eq!(run(&mut e, &x, &x, 480), run(&mut unity(), &x, &x, 480));
+}
+
+/// Records the band energies of the mid spectrum the processor hands to its mask.
+struct Recorder(Arc<Mutex<Vec<[f32; NUM_BANDS]>>>, ErbBands);
+
+impl MaskSource for Recorder {
+    fn next_mask(&mut self, mid: &[Complex32], gains_db: &mut [f32; NUM_BANDS]) {
+        let mut row = [0.0; NUM_BANDS];
+        self.1.band_energies_db(mid, &mut row);
+        self.0.lock().unwrap().push(row);
+        gains_db.fill(0.0);
+    }
+}
+
+#[test]
+fn mask_call_k_sees_feature_row_k() {
+    let x = white_noise(6, 480 * 20 + 123, 0.3);
+    let y = white_noise(7, 480 * 20 + 123, 0.3);
+    let rows = FeatureExtractor::new().band_energies_db(&x, &y);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Recorder(seen.clone(), ErbBands::new());
+    let mut p = Processor::with_mask(Box::new(recorder), 48_000).unwrap();
+    run(&mut p, &x, &y, 480);
+    let seen = seen.lock().unwrap();
+    assert_eq!(rows.len(), 20);
+    assert_eq!(&seen[..rows.len()], &rows[..]);
+}
+
+#[test]
+fn limiter_can_be_disabled_for_linear_measurement() {
+    let x = sine(1000.0, 0.5, 48_000);
+    let loud = || Box::new(ExternalMask::new(vec![[12.0; NUM_BANDS]]));
+    let mut on = Processor::with_mask(loud(), 48_000).unwrap();
+    let mut off = Processor::with_mask(loud(), 48_000).unwrap();
+    off.set_limiter_enabled(false);
+    assert!(peak(&run(&mut on, &x, &x, 480).0) <= CEILING);
+    assert!(peak(&run(&mut off, &x, &x, 480).0) > 1.5);
 }

@@ -23,6 +23,7 @@ pub struct Processor {
     mask: Box<dyn MaskSource>,
     smoother: GainSmoother,
     limiter: Limiter,
+    limiter_enabled: bool,
     mid: Vec<Complex32>,
     raw_db: [f32; NUM_BANDS],
     smooth_db: [f32; NUM_BANDS],
@@ -54,6 +55,7 @@ impl Processor {
             mask,
             smoother: GainSmoother::new(),
             limiter: Limiter::new(),
+            limiter_enabled: true,
             mid: vec![Complex32::new(0.0, 0.0); BINS],
             raw_db: [0.0; NUM_BANDS],
             smooth_db: [0.0; NUM_BANDS],
@@ -72,6 +74,12 @@ impl Processor {
         WIN
     }
 
+    /// Offline measurement switch: when off, output bypasses the limiter (and its
+    /// non-finite guard) so per-stem gains stay linear. Plugins leave it on.
+    pub fn set_limiter_enabled(&mut self, on: bool) {
+        self.limiter_enabled = on;
+    }
+
     /// Process in place. Never allocates, locks or panics.
     ///
     /// Contract: `left` and `right` must have equal length. In a release build
@@ -88,7 +96,9 @@ impl Processor {
             self.in_l[self.pos] = *l;
             self.in_r[self.pos] = *r;
             let (mut ol, mut or) = (self.out_l[self.pos], self.out_r[self.pos]);
-            self.limiter.process(&mut ol, &mut or);
+            if self.limiter_enabled {
+                self.limiter.process(&mut ol, &mut or);
+            }
             *l = ol;
             *r = or;
             self.pos += 1;
