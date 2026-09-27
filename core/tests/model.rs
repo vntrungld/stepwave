@@ -180,6 +180,70 @@ fn model_processor_preserves_stereo_image() {
 }
 
 #[test]
+fn model_mask_recovers_from_nan_and_inf_band_energy() {
+    // Two masks kept in lockstep on identical clean frames; `used` additionally
+    // sees two frames whose mid spectrum has one non-finite bin each (a NaN and
+    // an +inf), `reference` sees the same frames unmodified. A single glitched
+    // bin drives 2 of the 32 band energies non-finite (erb::band_energies_db
+    // splits each FFT bin's power between its two neighbouring bands).
+    let m = model();
+    let mut used = ModelMask::new(&m, 6.0);
+    let mut reference = ModelMask::new(&m, 6.0);
+    let mut g = [0.0; NUM_BANDS];
+
+    for seed in 0..5 {
+        let s = spectrum(seed);
+        used.next_mask(&s, &mut g);
+        reference.next_mask(&s, &mut g);
+    }
+
+    let clean_50 = spectrum(50);
+    let mut nan_50 = clean_50.clone();
+    nan_50[10] = Complex32::new(f32::NAN, 0.0);
+    used.next_mask(&nan_50, &mut g);
+    assert!(
+        g.iter().all(|v| v.is_finite()),
+        "a NaN band energy must never leave a non-finite gain: {g:?}"
+    );
+    reference.next_mask(&clean_50, &mut g);
+
+    let clean_51 = spectrum(51);
+    let mut inf_51 = clean_51.clone();
+    inf_51[10] = Complex32::new(f32::INFINITY, 0.0);
+    used.next_mask(&inf_51, &mut g);
+    assert!(
+        g.iter().all(|v| v.is_finite()),
+        "a +inf band energy must never leave a non-finite gain: {g:?}"
+    );
+    reference.next_mask(&clean_51, &mut g);
+
+    // Let ~1 s (100 frames) of identical clean input pass, for the recurrent
+    // state's fading memory to settle, before comparing.
+    for seed in 100..200 {
+        let s = spectrum(seed);
+        used.next_mask(&s, &mut g);
+        reference.next_mask(&s, &mut g);
+    }
+
+    // The two masks must now agree closely: the model's recurrent state must
+    // not stay permanently corrupted by the earlier non-finite frames.
+    for seed in 200..300 {
+        let s = spectrum(seed);
+        let (mut a, mut b) = ([0.0; NUM_BANDS], [0.0; NUM_BANDS]);
+        used.next_mask(&s, &mut a);
+        reference.next_mask(&s, &mut b);
+        for i in 0..NUM_BANDS {
+            assert!(
+                (a[i] - b[i]).abs() < 1e-3,
+                "seed {seed} band {i}: used {} vs reference {}",
+                a[i],
+                b[i]
+            );
+        }
+    }
+}
+
+#[test]
 fn processor_reset_equals_fresh_processor() {
     let x = white_noise(14, 24_000, 0.3);
     let mut used = model_processor();

@@ -81,6 +81,10 @@ impl MaskSource for ExternalMask {
         }
         self.next = self.next.saturating_add(1);
     }
+
+    fn reset(&mut self) {
+        self.next = 0;
+    }
 }
 
 /// The trained model: mid band energies → per-band gains, scaled by the profile's strength
@@ -108,10 +112,24 @@ impl ModelMask {
     }
 }
 
+/// dB floor a band energy is replaced with when it comes out non-finite (e.g. a
+/// NaN or +-inf input sample poisoning one FFT bin). Matches the floor
+/// `erb::band_energies_db` itself already produces for silence, so a glitched
+/// band reads as silent rather than corrupting `ModelRunner`'s recurrent state:
+/// unlike a merely huge-but-finite value, NaN/inf survive a `f32::max`-based
+/// ReLU or a sigmoid/tanh gate in ways that depend on incidental sign
+/// cancellation, so they must never reach the runner at all.
+const ENERGY_FLOOR_DB: f32 = -100.0;
+
 impl MaskSource for ModelMask {
     fn next_mask(&mut self, mid_spectrum: &[Complex32], gains_db: &mut [f32; NUM_BANDS]) {
         self.bands
             .band_energies_db(mid_spectrum, &mut self.energies);
+        for e in self.energies.iter_mut() {
+            if !e.is_finite() {
+                *e = ENERGY_FLOOR_DB;
+            }
+        }
         self.runner.step(&self.energies, gains_db);
         for g in gains_db.iter_mut() {
             *g = (*g * self.scale).clamp(self.lo, self.hi);
@@ -216,5 +234,23 @@ mod tests {
         assert_eq!(g, [-2.0; NUM_BANDS]);
         UnityMask.next_mask(&[], &mut g);
         assert_eq!(g, [0.0; NUM_BANDS]);
+    }
+
+    #[test]
+    fn external_mask_reset_rewinds_the_replay_index() {
+        let mut mask = ExternalMask::new(vec![[1.0; NUM_BANDS], [2.0; NUM_BANDS]]);
+        let mut g = [0.0; NUM_BANDS];
+        mask.next_mask(&[], &mut g);
+        assert_eq!(g, [1.0; NUM_BANDS]);
+        mask.next_mask(&[], &mut g);
+        assert_eq!(g, [2.0; NUM_BANDS]);
+        mask.next_mask(&[], &mut g);
+        assert_eq!(g, [2.0; NUM_BANDS]); // held past the end
+
+        mask.reset();
+        mask.next_mask(&[], &mut g);
+        assert_eq!(g, [1.0; NUM_BANDS]);
+        mask.next_mask(&[], &mut g);
+        assert_eq!(g, [2.0; NUM_BANDS]);
     }
 }
