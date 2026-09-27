@@ -15,7 +15,7 @@ from stepwave_model import STEMS
 from stepwave_model.cli import app
 from stepwave_model.config import load_config
 from stepwave_model.errors import TrainerError
-from stepwave_model.evaluate import MODES, ModelGains, evaluate, summarize
+from stepwave_model.evaluate import MODES, ModelGains, _db, evaluate, summarize
 from stepwave_model.export import export
 from stepwave_model.prep import load_split
 from stepwave_model.targets import active_frames
@@ -53,6 +53,48 @@ def test_stub_boost_is_measured(tmp_path: Path) -> None:
         for mode in MODES:
             assert (out / f"val_{i:02d}_{mode}.flac").is_file()
     assert (out / "band_gain.png").is_file() and (out / "gain_hist.png").is_file()
+
+
+def test_workers_match_serial(tmp_path: Path) -> None:
+    feats = prepped(tmp_path, {"train": 1, "val": 3}, seconds=1.0)
+    cfg = load_config(CONFIG_PATH)
+    m1 = evaluate(
+        stub_gains,
+        feats,
+        tmp_path / "sets/t",
+        tmp_path / "e1",
+        cfg,
+        PROFILE,
+        workers=1,
+        log=quiet,
+    )
+    m2 = evaluate(
+        stub_gains,
+        feats,
+        tmp_path / "sets/t",
+        tmp_path / "e2",
+        cfg,
+        PROFILE,
+        workers=2,
+        log=quiet,
+    )
+    assert m1 == m2
+
+
+def test_db_and_summarize_undefined_ratio_is_none() -> None:
+    assert _db(0.0, 1.0) is None
+    assert _db(1.0, 0.0) is None
+    assert _db(1.0, 1.0) == pytest.approx(0.0)
+    energy = np.zeros((3, len(STEMS), 2, 2))
+    energy[:, STEMS.index("footsteps"), :, :] = 1.0  # only footsteps ever sound
+    fb = np.array([[0, 10], [0, 10], [0, 10]], float)
+    m = summarize({"energy": energy, "fb": fb})
+    for mode in MODES:
+        assert m[mode]["gunfire_active_db"] is None
+        assert m[mode]["gunfire_inactive_db"] is None
+        assert m[mode]["footstep_gain_db"] == pytest.approx(0.0)
+        # no masking energy at all anywhere -> SNR is undefined, not 0 dB
+        assert m[mode]["snr_improvement_db"] is None
 
 
 def test_summarize_math() -> None:

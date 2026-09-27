@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ from tqdm import tqdm
 from . import HOP, NUM_BANDS, SAMPLE_RATE, STEMS, swm_ref
 from .config import Config, TargetConfig
 from .errors import TrainerError
-from .prep import _binding, load_manifest, load_split, map_jobs, read_stereo
+from .prep import Split, _binding, load_manifest, load_split, map_jobs, read_stereo
 from .swm import SwmModel, read_swm
 from .targets import active_frames
 
@@ -23,6 +23,7 @@ MODES = ("off", "eq", "model")
 GROUPS = ("active", "inactive")
 HIST_EDGES = np.linspace(-12.0, 12.0, 49)
 GainFn = Callable[[dict[str, np.ndarray]], np.ndarray]
+Job = tuple[Path, dict[str, np.ndarray], GainFn, np.ndarray, TargetConfig, float]
 
 
 class ModelGains:
@@ -80,9 +81,7 @@ def _mode_gains(
     }
 
 
-def eval_clip(
-    job: tuple[Path, dict[str, np.ndarray], GainFn, np.ndarray, TargetConfig, float],
-) -> dict[str, np.ndarray]:
+def eval_clip(job: Job) -> dict[str, np.ndarray]:
     """Accumulators for one clip:
     energy [mode, stem, group, in/out], fb [mode, (boosted inactive, inactive)],
     band_sum [group, 32] and band_n [group] of model gains, hist [48] of model gains."""
@@ -120,16 +119,16 @@ def eval_clip(
     }
 
 
-def _db(num: float, den: float) -> float:
-    """Power ratio in dB. A stem with no energy in this group (den <= 0) has nothing to
-    measure a change against, so it is reported as 0 dB (no change) rather than NaN — this
-    keeps metrics.json round-trippable and the report free of NaN cells."""
-    if den <= 0:
-        return 0.0
-    return float(10 * np.log10(num / den)) if num > 0 else float("-inf")
+def _db(num: float, den: float) -> float | None:
+    """Power ratio in dB, or None when it is undefined (no energy on either side to compare:
+    e.g. a stem that never sounds in this group). None (not NaN) keeps metrics.json strictly
+    JSON-safe and round-trippable (`None == None`, unlike `nan == nan`)."""
+    if num <= 0 or den <= 0:
+        return None
+    return float(10 * np.log10(num / den))
 
 
-def summarize(acc: dict[str, np.ndarray]) -> dict[str, dict[str, float]]:
+def summarize(acc: dict[str, np.ndarray]) -> dict[str, dict[str, float | None]]:
     energy, fb = acc["energy"], acc["fb"]
     fs = STEMS.index("footsteps")
     rest = [i for i in range(len(STEMS)) if i != fs]
@@ -138,9 +137,10 @@ def summarize(acc: dict[str, np.ndarray]) -> dict[str, dict[str, float]]:
         a = energy[m]
         snr_in = _db(a[fs, 0, 0], a[rest, 0, 0].sum())
         snr_out = _db(a[fs, 0, 1], a[rest, 0, 1].sum())
-        metrics = {
+        snr_improvement = snr_out - snr_in if snr_in is not None and snr_out is not None else None
+        metrics: dict[str, float | None] = {
             "footstep_gain_db": _db(a[fs, 0, 1], a[fs, 0, 0]),
-            "snr_improvement_db": snr_out - snr_in,
+            "snr_improvement_db": snr_improvement,
             "false_boost_pct": 100.0 * fb[m, 0] / max(fb[m, 1], 1.0),
         }
         for c in rest:
@@ -148,6 +148,35 @@ def summarize(acc: dict[str, np.ndarray]) -> dict[str, dict[str, float]]:
                 metrics[f"{STEMS[c]}_{group}_db"] = _db(a[c, g, 1], a[c, g, 0])
         out[mode] = metrics
     return out
+
+
+def _job(
+    set_dir: Path, split: Split, i: int, gain_fn: GainFn, eq_gains: np.ndarray, cfg: Config
+) -> Job:
+    """One clip's job: only that clip's energy slices are copied out of the memmapped split."""
+    e = {s: np.array(v) for s, v in split.clip(i).items()}
+    return (
+        set_dir / "val" / split.clips[i],
+        e,
+        gain_fn,
+        eq_gains,
+        cfg.target,
+        cfg.eval.false_boost_db,
+    )
+
+
+def _jobs(
+    set_dir: Path,
+    split: Split,
+    gain_fn: GainFn,
+    eq_gains: np.ndarray,
+    cfg: Config,
+    limit: int | None = None,
+) -> Iterator[Job]:
+    """Lazy, one job (and one clip's worth of memory) at a time; `map_jobs` preserves order."""
+    n = len(split.clips) if limit is None else min(limit, len(split.clips))
+    for i in range(n):
+        yield _job(set_dir, split, i, gain_fn, eq_gains, cfg)
 
 
 def _check_sources(features_dir: Path, set_dir: Path, clips: list[str]) -> None:
@@ -207,8 +236,12 @@ ROWS = [
 ]
 
 
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
+
+
 def _report(
-    metrics: dict[str, dict[str, float]],
+    metrics: dict[str, dict[str, float | None]],
     cfg: Config,
     label: str,
     clips: int,
@@ -228,14 +261,14 @@ def _report(
     for title, key, goal_key, op in ROWS:
         goal = getattr(cfg.eval, goal_key)
         value = metrics["model"][key]
-        ok = value >= goal if op == ">=" else value < goal
-        cells = " | ".join(f"{metrics[m][key]:.2f}" for m in MODES)
+        ok = (value >= goal if op == ">=" else value < goal) if value is not None else False
+        cells = " | ".join(_fmt(metrics[m][key]) for m in MODES)
         lines.append(f"| {title} | {cells} | {op} {goal:g} {'✅' if ok else '❌'} |")
     lines += ["", "| Class change (dB) | off | eq | model |", "|---|---|---|---|"]
     for stem in STEMS[1:]:
         for group in GROUPS:
             key = f"{stem}_{group}_db"
-            cells = " | ".join(f"{metrics[m][key]:.2f}" for m in MODES)
+            cells = " | ".join(_fmt(metrics[m][key]) for m in MODES)
             lines.append(f"| {stem}, {group} | {cells} |")
     lines += [
         "",
@@ -268,25 +301,18 @@ def evaluate(
         eq_gains = sw.static_eq_gains_db(profile_path.read_text())
     except (OSError, ValueError) as err:
         raise TrainerError(f"profile {profile_path}: {err}") from err
-    jobs = [
-        (
-            set_dir / "val" / name,
-            {s: np.array(v) for s, v in split.clip(i).items()},
-            gain_fn,
-            eq_gains,
-            cfg.target,
-            cfg.eval.false_boost_db,
-        )
-        for i, name in enumerate(split.clips)
-    ]
+    n_clips = len(split.clips)
     acc: dict[str, np.ndarray] = {}
-    for part in tqdm(map_jobs(eval_clip, jobs, workers), total=len(jobs), desc="eval"):
+    jobs = _jobs(set_dir, split, gain_fn, eq_gains, cfg)
+    for part in tqdm(map_jobs(eval_clip, jobs, workers), total=n_clips, desc="eval"):
         for k, v in part.items():
             acc[k] = acc[k] + v if k in acc else v
     metrics = summarize(acc)
     out_dir.mkdir(parents=True, exist_ok=True)
-    listen = min(cfg.eval.listen_examples, len(jobs))
-    for i, (clip_dir, e, *_rest) in enumerate(jobs[:listen]):
+    listen = min(cfg.eval.listen_examples, n_clips)
+    for i, (clip_dir, e, *_rest) in enumerate(
+        _jobs(set_dir, split, gain_fn, eq_gains, cfg, listen)
+    ):
         mix = read_stereo(clip_dir / "mix.flac")
         gains = _mode_gains(e, gain_fn, eq_gains)
         off = render(mix, gains["off"])
@@ -298,7 +324,7 @@ def evaluate(
     active_pct = 100.0 * (1.0 - inactive / max(split.frames, 1))
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True))
     (out_dir / "report.md").write_text(
-        _report(metrics, cfg, label, len(jobs), split.frames, active_pct, listen)
+        _report(metrics, cfg, label, n_clips, split.frames, active_pct, listen)
     )
     log(f"report: {out_dir / 'report.md'}")
     return metrics
