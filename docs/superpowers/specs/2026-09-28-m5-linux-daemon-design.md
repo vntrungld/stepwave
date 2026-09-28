@@ -52,7 +52,13 @@ data thread.
    - Plays the processed audio to the current default output and follows default-device
      changes.
    - The process callback calls `Processor::process` on each block.
-   - It reports 960 samples of latency to PipeWire.
+   - It reports 960 samples of latency to PipeWire. The playback stream is connected
+     with `TRIGGER` and the capture callback triggers it after each block (the
+     module-loopback pattern), so the output leaves in the same graph cycle and the
+     added delay really is 960 samples, not 960 plus one quantum.
+   - Capture and playback share `node.group` (one driver) and `node.link-group`
+     (WirePlumber never links them to each other), so choosing `stepwave` as the
+     default output cannot create a feedback loop.
    - Real-time rules from CLAUDE.md apply: no allocation, locks, logging, syscalls or
      panics in the callback.
    - **Risk:** exposing a sink and a playback side through `pipewire-rs` is unproven here.

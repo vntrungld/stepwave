@@ -1,6 +1,8 @@
 //! The PipeWire audio node: a capture stream that appears as the `stepwave` sink, and a
 //! playback stream that follows the default output device. The capture callback runs
-//! `AudioCore`; a lock-free ring carries the result to the playback callback. Both
+//! `AudioCore`, pushes the result into a lock-free ring and then triggers the playback
+//! stream (`StreamFlags::TRIGGER`, the module-loopback pattern), so the output plays in
+//! the same graph cycle and the added delay is exactly the reported 960 samples. Both
 //! callbacks run on PipeWire's real-time data thread (`RT_PROCESS`).
 
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -23,10 +25,18 @@ const RING_SAMPLES: usize = RATE as usize / 5 * CHANNELS;
 /// Algorithmic latency reported to PipeWire, in samples.
 const LATENCY_SAMPLES: i32 = 960;
 /// Backlog the playback side lets build up before it starts discarding whole
-/// frames (10 ms at 48 kHz), on top of whatever the current callback requests.
-const TARGET_FRAMES: usize = 480;
+/// frames (~1.3 ms at 48 kHz), on top of whatever the current callback requests.
+/// Playback is triggered right after capture in the same cycle, so in steady
+/// state the ring is empty after each playback; this only absorbs jitter (e.g.
+/// adapter resampling when the graph is not at 48 kHz) and caps any backlog
+/// left over from start-up or a relink at this much extra delay.
+const TARGET_FRAMES: usize = 64;
 
 /// Keeps both streams and their listeners alive; drop it to remove the sink.
+///
+/// `Drop` first disconnects both streams (`pw_stream_disconnect` syncs with the
+/// data loop), so no process callback can still be running when the listeners
+/// and their user data (the `AudioCore`) are freed below.
 ///
 /// Field order is drop order: the listeners must unhook before the streams
 /// they listen on are destroyed. `pw_stream_destroy` frees memory a still-
@@ -43,11 +53,20 @@ pub struct Node {
     pub rate: Arc<AtomicU32>,
 }
 
+impl Drop for Node {
+    fn drop(&mut self) {
+        let _ = self._capture.disconnect();
+        let _ = self._playback.disconnect();
+    }
+}
+
 pub struct CaptureData {
     core: AudioCore,
     ring: rtrb::Producer<f32>,
     rate: Arc<AtomicU32>,
     scratch: Vec<f32>,
+    /// The `TRIGGER`ed playback stream, run right after each capture cycle.
+    playback: StreamRc,
 }
 
 /// How many whole frames the playback side should discard from `ring` before
@@ -113,79 +132,48 @@ fn latency_pod() -> Vec<u8> {
     }))
 }
 
+/// One capture cycle: process the dequeued input and push it into the ring.
+fn capture_cycle(stream: &pw::stream::Stream, data: &mut CaptureData) {
+    let Some(mut buf) = stream.dequeue_buffer() else {
+        return;
+    };
+    let datas = buf.datas_mut();
+    let Some(d) = datas.first_mut() else { return };
+    let offset = d.chunk().offset() as usize;
+    let size = d.chunk().size() as usize;
+    let Some(bytes) = d.data() else { return };
+    let Some(bytes) = bytes.get(offset..offset + size) else {
+        return;
+    };
+    // Defensive only: the stream format is fixed at 48 kHz below (PipeWire's
+    // adapter converts from any other graph rate at the stream boundary), so
+    // once negotiated this should always be true.
+    let processing = data.rate.load(Relaxed) == RATE;
+    for frame_bytes in bytes.chunks(data.scratch.len() * 4) {
+        let n = frame_bytes.len() / 4;
+        let block = &mut data.scratch[..n];
+        for (v, b) in block.iter_mut().zip(frame_bytes.as_chunks::<4>().0) {
+            *v = f32::from_le_bytes(*b);
+        }
+        if processing {
+            data.core.process_interleaved(block);
+        }
+        // Move whole stereo frames only: push a frame just when both its
+        // samples fit, else drop it whole. Never push one channel of a
+        // frame without the other, or the playback side desynchronises L/R.
+        for frame in block.as_chunks::<2>().0 {
+            if data.ring.slots() >= 2 {
+                let _ = data.ring.push(frame[0]);
+                let _ = data.ring.push(frame[1]);
+            }
+        }
+    }
+}
+
 /// Create the sink and its output. `audio` is moved onto the data thread.
 pub fn create(core: &pw::core::CoreRc, audio: AudioCore) -> Result<Node, pw::Error> {
     let rate = Arc::new(AtomicU32::new(0));
     let (ring_tx, ring_rx) = rtrb::RingBuffer::<f32>::new(RING_SAMPLES);
-
-    let capture = StreamRc::new(
-        core.clone(),
-        SINK_NAME,
-        properties! {
-            *pw::keys::MEDIA_CLASS => "Audio/Sink",
-            *pw::keys::NODE_NAME => SINK_NAME,
-            *pw::keys::NODE_DESCRIPTION => "stepwave (footstep enhancer)",
-            "audio.position" => "[ FL FR ]",
-            "node.latency" => "480/48000",
-            // Same group as the playback stream: they share one driver, like
-            // module-loopback/filter-chain do, instead of free-running clocks.
-            "node.group" => "stepwave",
-        },
-    )?;
-    let capture_listener = capture
-        .add_local_listener_with_user_data(CaptureData {
-            core: audio,
-            ring: ring_tx,
-            rate: rate.clone(),
-            scratch: vec![0.0; MAX_FRAMES * CHANNELS],
-        })
-        .param_changed(|_, data, id, param| {
-            let Some(param) = param else { return };
-            if id != spa::param::ParamType::Format.as_raw() {
-                return;
-            }
-            let mut info = spa::param::audio::AudioInfoRaw::new();
-            if info.parse(param).is_ok() {
-                data.rate.store(info.rate(), Relaxed);
-            }
-        })
-        .process(|stream, data| {
-            let Some(mut buf) = stream.dequeue_buffer() else {
-                return;
-            };
-            let datas = buf.datas_mut();
-            let Some(d) = datas.first_mut() else { return };
-            let offset = d.chunk().offset() as usize;
-            let size = d.chunk().size() as usize;
-            let Some(bytes) = d.data() else { return };
-            let Some(bytes) = bytes.get(offset..offset + size) else {
-                return;
-            };
-            // Defensive only: the stream format is fixed at 48 kHz below (PipeWire's
-            // adapter converts from any other graph rate at the stream boundary), so
-            // once negotiated this should always be true.
-            let processing = data.rate.load(Relaxed) == RATE;
-            for frame_bytes in bytes.chunks(data.scratch.len() * 4) {
-                let n = frame_bytes.len() / 4;
-                let block = &mut data.scratch[..n];
-                for (v, b) in block.iter_mut().zip(frame_bytes.as_chunks::<4>().0) {
-                    *v = f32::from_le_bytes(*b);
-                }
-                if processing {
-                    data.core.process_interleaved(block);
-                }
-                // Move whole stereo frames only: push a frame just when both its
-                // samples fit, else drop it whole. Never push one channel of a
-                // frame without the other, or the playback side desynchronises L/R.
-                for frame in block.as_chunks::<2>().0 {
-                    if data.ring.slots() >= 2 {
-                        let _ = data.ring.push(frame[0]);
-                        let _ = data.ring.push(frame[1]);
-                    }
-                }
-            }
-        })
-        .register()?;
 
     let playback = StreamRc::new(
         core.clone(),
@@ -198,8 +186,10 @@ pub fn create(core: &pw::core::CoreRc, audio: AudioCore) -> Result<Node, pw::Err
             *pw::keys::NODE_DESCRIPTION => "stepwave output",
             "audio.position" => "[ FL FR ]",
             "node.latency" => "480/48000",
-            // Same group as the capture stream: see the comment there.
+            // Same group and link group as the capture stream: see the
+            // comments there.
             "node.group" => "stepwave",
+            "node.link-group" => "stepwave",
         },
     )?;
     let playback_listener = playback
@@ -248,7 +238,57 @@ pub fn create(core: &pw::core::CoreRc, audio: AudioCore) -> Result<Node, pw::Err
         })
         .register()?;
 
+    let capture = StreamRc::new(
+        core.clone(),
+        SINK_NAME,
+        properties! {
+            *pw::keys::MEDIA_CLASS => "Audio/Sink",
+            *pw::keys::NODE_NAME => SINK_NAME,
+            *pw::keys::NODE_DESCRIPTION => "stepwave (footstep enhancer)",
+            "audio.position" => "[ FL FR ]",
+            "node.latency" => "480/48000",
+            // Same group as the playback stream: they share one driver, like
+            // module-loopback/filter-chain do, instead of free-running clocks.
+            "node.group" => "stepwave",
+            // Same link group too: WirePlumber never links two nodes of one
+            // link group, so selecting `stepwave` as the default output cannot
+            // route `stepwave-output` back into it (a feedback loop).
+            "node.link-group" => "stepwave",
+        },
+    )?;
+    let capture_listener = capture
+        .add_local_listener_with_user_data(CaptureData {
+            core: audio,
+            ring: ring_tx,
+            rate: rate.clone(),
+            scratch: vec![0.0; MAX_FRAMES * CHANNELS],
+            playback: playback.clone(),
+        })
+        .param_changed(|_, data, id, param| {
+            let Some(param) = param else { return };
+            if id != spa::param::ParamType::Format.as_raw() {
+                return;
+            }
+            let mut info = spa::param::audio::AudioInfoRaw::new();
+            if info.parse(param).is_ok() {
+                data.rate.store(info.rate(), Relaxed);
+            }
+        })
+        .process(|stream, data| {
+            capture_cycle(stream, data);
+            // Run the playback stream now, in this same cycle, so it plays what
+            // was just pushed instead of last cycle's audio. Done on every cycle,
+            // even one with no input buffer, so the playback side never stalls.
+            // RT-safe: for a TRIGGER stream this only marks the node ready and
+            // signals its eventfd, exactly as the graph scheduler itself does.
+            let _ = data.playback.trigger_process();
+        })
+        .register()?;
+
     let flags = StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS;
+    // The playback stream is not scheduled by the driver on its own; the
+    // capture callback triggers it once its output is in the ring.
+    let playback_flags = flags | StreamFlags::TRIGGER;
     let (fmt_in, fmt_out, lat) = (format_pod(), format_pod(), latency_pod());
     capture.connect(
         spa::utils::Direction::Input,
@@ -260,7 +300,7 @@ pub fn create(core: &pw::core::CoreRc, audio: AudioCore) -> Result<Node, pw::Err
     playback.connect(
         spa::utils::Direction::Output,
         None,
-        flags,
+        playback_flags,
         &mut [Pod::from_bytes(&fmt_out).expect("valid pod")],
     )?;
 

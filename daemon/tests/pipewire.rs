@@ -264,3 +264,265 @@ fn routed_audio_reaches_the_output() {
     // underrunning or desynchronised ring).
     assert!(db > -60.0, "recording is too quiet ({db:.1} dBFS)");
 }
+
+/// All `pw-link -l` targets of the ports of `node` whose names start with
+/// `port_prefix` (e.g. `("stepwave-output", "output_")`).
+fn links_of(node: &str, port_prefix: &str) -> Vec<String> {
+    let out = Command::new("pw-link").arg("-l").output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let own = format!("{node}:{port_prefix}");
+    let mut links = Vec::new();
+    let mut in_node = false;
+    for l in text.lines() {
+        let t = l.trim();
+        if t.starts_with("|->") || t.starts_with("|<-") {
+            if in_node {
+                links.push(t[3..].trim().to_string());
+            }
+        } else {
+            in_node = t.starts_with(&own);
+        }
+    }
+    links
+}
+
+/// Value of `key` in the `default` metadata (subject 0), if set.
+fn default_metadata(key: &str) -> Option<String> {
+    let out = Command::new("pw-metadata")
+        .args(["-n", "default", "0", key])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.contains(&format!("key:'{key}'")))?;
+    let value = line.split("value:'").nth(1)?;
+    Some(value[..value.find("' type:")?].to_string())
+}
+
+/// Sets `default.configured.audio.sink` for the life of the guard and puts
+/// the previous value back (or removes the key if it was unset) on drop, so
+/// the user's default output is restored even if the test panics.
+struct DefaultSink(Option<String>);
+impl DefaultSink {
+    fn set(name: &str) -> DefaultSink {
+        let key = "default.configured.audio.sink";
+        let guard = DefaultSink(default_metadata(key));
+        let value = format!("{{\"name\":\"{name}\"}}");
+        let ok = Command::new("pw-metadata")
+            .args(["-n", "default", "0", key, &value, "Spa:String:JSON"])
+            .stdout(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "could not set the default sink");
+        guard
+    }
+}
+impl Drop for DefaultSink {
+    fn drop(&mut self) {
+        let key = "default.configured.audio.sink";
+        let mut cmd = Command::new("pw-metadata");
+        cmd.args(["-n", "default"]);
+        match &self.0 {
+            Some(prev) => cmd.args(["0", key, prev, "Spa:String:JSON"]),
+            None => cmd.args(["-d", "0", key]),
+        };
+        let _ = cmd.stdout(Stdio::null()).status();
+    }
+}
+
+#[test]
+#[ignore = "needs a running PipeWire session; briefly changes the default output"]
+fn selecting_stepwave_as_default_output_does_not_loop() {
+    let (dir, _wav, sock) = setup();
+    let _d = daemon(dir.path(), &sock);
+    wait_for("daemon socket", || sock.exists());
+    wait_for("stepwave-output linked to a device", || {
+        !links_of("stepwave-output", "output_").is_empty()
+    });
+    let _default = DefaultSink::set("stepwave");
+    wait_for("WirePlumber to apply the new default", || {
+        default_metadata("default.audio.sink").is_some_and(|v| v.contains("\"stepwave\""))
+    });
+    // Give WirePlumber time to (wrongly) re-link the output to the new default.
+    sleep(Duration::from_millis(1500));
+    let links = links_of("stepwave-output", "output_");
+    assert!(
+        !links.is_empty(),
+        "stepwave-output should stay linked to a real device"
+    );
+    assert!(
+        links.iter().all(|l| !l.starts_with("stepwave:")),
+        "feedback loop: stepwave-output is linked into its own sink: {links:?}"
+    );
+}
+
+/// Clicks (one sample at -12 dBFS on both channels) every 250 ms after 500 ms
+/// of silence, as a 16-bit stereo WAV.
+fn write_clicks(path: &Path, seconds: f32) {
+    let frames = (48_000.0 * seconds) as usize;
+    let clicks: Vec<usize> = (24_000..frames - 12_000).step_by(12_000).collect();
+    let mut data = vec![0u8; frames * 4];
+    for &c in &clicks {
+        let v = 8192i16.to_le_bytes();
+        data[c * 4..c * 4 + 2].copy_from_slice(&v);
+        data[c * 4 + 2..c * 4 + 4].copy_from_slice(&v);
+    }
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    for v in [16u32, 0x0002_0001, 48_000, 48_000 * 4, 0x0010_0004] {
+        wav.extend_from_slice(&v.to_le_bytes());
+    }
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+    std::fs::write(path, wav).unwrap();
+}
+
+fn link(from: &str, to: &str) {
+    let ok = Command::new("pw-link")
+        .args([from, to])
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "pw-link {from} {to} failed");
+}
+
+#[test]
+#[ignore = "needs a running PipeWire session"]
+fn output_delay_is_the_reported_latency() {
+    let (dir, _wav, sock) = setup();
+    let clicks = dir.path().join("clicks.wav");
+    write_clicks(&clicks, 3.0);
+    // Bypass: a unity mask with the same 960-sample latency as every mode, so
+    // the click comes out unfiltered and easy to locate.
+    let _d = Kill(
+        Command::new(env!("CARGO_BIN_EXE_stepwave"))
+            .args(["--socket"])
+            .arg(&sock)
+            .args(["daemon", "--mode", "bypass", "--profiles"])
+            .arg(dir.path().join("profiles"))
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for("daemon socket", || sock.exists());
+    sleep(Duration::from_millis(500));
+
+    // One recorder, two channels, linked by hand: FL = what pw-play sends into
+    // stepwave, FR = what stepwave-output plays. Both are recorded on the same
+    // clock, so their offset is the added delay (plus the async hop explained
+    // below).
+    let out = dir.path().join("delay.wav");
+    let rec = Kill(
+        Command::new("pw-record")
+            .args(["--rate", "48000", "--channels", "2", "--format", "s16"])
+            .args(["-P", "{ node.autoconnect = false }"])
+            .arg(&out)
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for("pw-record ports", || {
+        links_of("pw-record", "input_").is_empty()
+            && String::from_utf8_lossy(&Command::new("pw-link").arg("-i").output().unwrap().stdout)
+                .contains("pw-record:input_FR")
+    });
+    link("stepwave-output:output_FL", "pw-record:input_FR");
+    let p = Kill(
+        Command::new("pw-play")
+            .args(["--target", "stepwave"])
+            .arg(&clicks)
+            .spawn()
+            .unwrap(),
+    );
+    wait_for("pw-play ports", || {
+        String::from_utf8_lossy(&Command::new("pw-link").arg("-o").output().unwrap().stdout)
+            .contains("pw-play:output_FL")
+    });
+    link("pw-play:output_FL", "pw-record:input_FL");
+    sleep(Duration::from_millis(500));
+    let quantum = driver_quantum_of("stepwave").expect("stepwave has a driver");
+    let mut p = p;
+    let _ = p.0.wait();
+    sleep(Duration::from_millis(300));
+    // SIGTERM so pw-record closes the WAV cleanly; the guard only reaps it.
+    let mut rec = rec;
+    let _ = Command::new("kill").arg(rec.0.id().to_string()).status();
+    let _ = rec.0.wait();
+
+    let samples = read_wav_i16(&out);
+    let (dry, wet): (Vec<i16>, Vec<i16>) = samples
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|f| (f[0], f[1]))
+        .unzip();
+    // For each click in the dry channel, the loudest wet sample within the
+    // next 100 ms is its processed copy.
+    let mut delays = Vec::new();
+    let mut i = 0;
+    while i < dry.len() {
+        if dry[i].unsigned_abs() > 4000 {
+            let end = (i + 4800).min(wet.len());
+            if let Some((d, _)) = wet[i..end]
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, v)| v.unsigned_abs())
+            {
+                delays.push(d);
+            }
+            i += 6000;
+        } else {
+            i += 1;
+        }
+    }
+    assert!(delays.len() >= 4, "found too few clicks: {delays:?}");
+    delays.sort_unstable();
+    let median = delays[delays.len() / 2];
+    // `pw-play` and `pw-record` are async nodes (PipeWire >= 1.2): each async
+    // link hands over the previous cycle's buffer. The dry path has one such
+    // hop (pw-play -> pw-record), the wet path two (pw-play -> stepwave,
+    // stepwave-output -> pw-record), so the recording shows one quantum more
+    // than stepwave itself adds. A real device is the driver and has no async
+    // hop, so that quantum is not part of stepwave's latency.
+    let added = median.saturating_sub(quantum);
+    eprintln!(
+        "measured delays (samples): {delays:?}; median {median}; quantum {quantum}; \
+         added by stepwave {added}"
+    );
+    assert!(
+        added.abs_diff(960) <= 48,
+        "stepwave adds {added} samples (median {median} - quantum {quantum}); \
+         expected the reported 960"
+    );
+}
+
+/// The current quantum of the driver that `follower` runs under, from
+/// `pw-top` (drivers are listed with their followers below them, prefixed
+/// with `+`/`=`).
+fn driver_quantum_of(follower: &str) -> Option<usize> {
+    let out = Command::new("pw-top")
+        .args(["-b", "-n", "2"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut driver_quantum = None;
+    let mut found = None;
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 3 || cols[0] == "S" {
+            continue;
+        }
+        let name = cols.last().copied().unwrap_or_default();
+        let is_follower = line.contains(" + ") || line.contains(" = ");
+        if !is_follower {
+            driver_quantum = cols[2].parse::<usize>().ok().filter(|&q| q > 0);
+        } else if name == follower {
+            // Later samples (the second `-n` iteration) overwrite earlier ones.
+            found = driver_quantum;
+        }
+    }
+    found
+}
