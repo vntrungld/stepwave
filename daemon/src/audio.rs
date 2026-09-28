@@ -5,6 +5,14 @@
 //! `WARMUP` samples (its own latency, so its output is valid and time-aligned with the
 //! old one), then the output crossfades linearly over `XFADE` samples. The old processor
 //! goes back through a second ring so it is dropped off the audio thread.
+//!
+//! There is only one `retired` slot for a processor that could not be pushed back
+//! because that second ring was full. A new swap is therefore never started while a
+//! retired processor is still waiting there: starting one anyway could finish before
+//! the ring drains, and the retired slot would then be overwritten (and the processor
+//! it held silently dropped, on the audio thread) instead of handed back. The pending
+//! processor simply waits in the incoming ring until `collect()` frees room and the
+//! retired slot clears.
 
 use stepwave_core::Processor;
 
@@ -84,7 +92,10 @@ impl AudioCore {
                 self.retired = Some(old);
             }
         }
-        if self.incoming.is_none() {
+        // Only start a new swap once the previous retiree is no longer waiting in
+        // `retired`: otherwise this swap could finish and retire another processor
+        // before that slot is freed, overwriting (dropping) the one already there.
+        if self.incoming.is_none() && self.retired.is_none() {
             if let Ok(p) = self.new_rx.pop() {
                 self.incoming = Some(p);
                 self.pos = 0;
@@ -245,5 +256,40 @@ mod tests {
         let out = run(&mut core, &input, MAX_FRAMES * 2 + 100);
         assert_eq!(out.len(), input.len());
         assert!(out.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn no_processor_is_dropped_without_collect() {
+        // `old_tx` holds 4 and `retired` holds 1 more: six swaps with no `collect()`
+        // in between overflows that capacity by one. None of the six retirees may be
+        // dropped on the audio thread; they must all still be collectible once the
+        // control side starts calling `collect()` again.
+        let swaps = 6;
+        let (mut h, mut core) = channel(unity());
+        let mut block = vec![0.1f32; 256 * 2];
+        let swap_frames = (WARMUP + XFADE) / 256 + 2;
+
+        for _ in 0..swaps {
+            assert!(h.publish(Box::new(unity())).is_ok());
+            for _ in 0..swap_frames {
+                core.process_interleaved(&mut block);
+            }
+        }
+
+        // Nothing was collected yet. Now give the pipeline time to flush retirees
+        // and finish any still-pending swap, calling `collect()` repeatedly rather
+        // than assuming everything is ready in one shot ("eventually").
+        let mut collected = 0;
+        for _ in 0..(swaps + 4) {
+            for _ in 0..swap_frames {
+                core.process_interleaved(&mut block);
+            }
+            collected += h.collect();
+        }
+
+        assert_eq!(
+            collected, swaps,
+            "a retired processor was dropped on the audio thread"
+        );
     }
 }
