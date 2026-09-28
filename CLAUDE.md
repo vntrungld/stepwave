@@ -129,11 +129,11 @@ check FACEIT/tournament rules.
 
 ## Roadmap
 
-- [ ] M0: repo scaffolding, Rust workspace, CI (fmt, clippy, tests)
-- [ ] M1: `core` with STFT/ERB + **static EQ fallback** + limiter; offline CLI `stepwave-cli in.wav out.wav --profile cs2`
-- [ ] M2: `training/datagen` synthetic mixer + dataset stats
+- [x] M0: repo scaffolding, Rust workspace, CI (fmt, clippy, tests)
+- [x] M1: `core` with STFT/ERB + **static EQ fallback** + limiter; offline CLI `stepwave-cli in.wav out.wav --profile cs2`
+- [x] M2: `training/datagen` synthetic mixer + dataset stats
 - [ ] M3: train CS2 model, export, offline A/B on real recordings (measure footstep gain, false-boost rate)
-- [ ] M4: real-time inference in `core`, benchmark (µs per 10 ms frame, must be < 1 ms)
+- [x] M4: real-time inference in `core`, benchmark (µs per 10 ms frame, must be < 1 ms)
 - [ ] M5: Linux `stepwave` daemon — native PipeWire sink running `core` + per-app stream routing + CLI control (Linux first — dev box)
 - [ ] M6: VST3 plugin + Equalizer APO setup guide + Windows tray app (for FACEIT CS2)
 - [ ] M7: PUBG model, generic FPS model, profile UI

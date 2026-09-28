@@ -1,0 +1,19 @@
+# systemd user unit for the stepwave daemon.
+# Install:
+#   cargo install --path daemon
+#   mkdir -p ~/.config/stepwave/profiles ~/.config/stepwave/models ~/.config/systemd/user
+#   cp profiles/*.json ~/.config/stepwave/profiles/ && cp models/*.swm ~/.config/stepwave/models/
+#   cp daemon/stepwave.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now stepwave
+[Unit]
+Description=stepwave footstep enhancer (PipeWire)
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+ExecStart=%h/.cargo/bin/stepwave daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
