@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use stepwave_daemon::control::{self, ClientError};
+use stepwave_daemon::control;
 use stepwave_daemon::daemon::{self, Options};
 use stepwave_daemon::protocol::{ModeArg, Request, Response, Status};
 
@@ -122,7 +122,7 @@ fn main() -> ExitCode {
     };
     match control::request(&socket, &request) {
         Ok(resp) => print_response(&resp, cli.json),
-        Err(e @ ClientError::NotRunning) | Err(e) => {
+        Err(e) => {
             eprintln!("stepwave: {e}");
             ExitCode::FAILURE
         }

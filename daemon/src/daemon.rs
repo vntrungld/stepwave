@@ -125,7 +125,11 @@ pub fn run(opts: Options) -> Result<()> {
             }
         }
     });
-    let _ = timer.update_timer(Some(Duration::from_millis(1)), Some(TICK));
+    // Without this timer the daemon would never connect, so fail loudly.
+    timer
+        .update_timer(Some(Duration::from_millis(1)), Some(TICK))
+        .into_sync_result()
+        .context("arming the housekeeping/reconnect timer")?;
 
     mainloop.run();
     Ok(())

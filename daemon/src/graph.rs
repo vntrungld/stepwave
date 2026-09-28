@@ -104,10 +104,13 @@ pub fn create(
                         return;
                     };
                     let id = g.id;
-                    let st = st_global.clone();
+                    // Weak: `State` owns this listener, so a strong `Rc` here would
+                    // be a cycle and leak `State` on every reconnect.
+                    let st = Rc::downgrade(&st_global);
                     let l = client
                         .add_listener_local()
                         .info(move |info| {
+                            let Some(st) = st.upgrade() else { return };
                             let binary = info
                                 .props()
                                 .and_then(|p| p.get("application.process.binary"))
@@ -128,10 +131,12 @@ pub fn create(
                     let Ok(md) = reg.bind::<Metadata, _>(g) else {
                         return;
                     };
-                    let st = st_global.clone();
+                    // Weak for the same reason as the client listener above.
+                    let st = Rc::downgrade(&st_global);
                     let l = md
                         .add_listener_local()
                         .property(move |subject, key, _type, value| {
+                            let Some(st) = st.upgrade() else { return 0 };
                             if key == Some("target.object") {
                                 let target = value.map(str::to_string);
                                 dispatch(

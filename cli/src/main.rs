@@ -108,8 +108,7 @@ fn resolve_profile(arg: &str) -> PathBuf {
     }
 }
 
-/// A relative `model` in a profile resolves against the parent of the profile's directory
-/// (`<root>/profiles/x.json` → `<root>/<model>`).
+/// Maps the CLI's `--mode` value onto the core's processing-mode selector.
 impl From<Mode> for select::Mode {
     fn from(m: Mode) -> Self {
         match m {

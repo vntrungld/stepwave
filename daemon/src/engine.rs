@@ -120,6 +120,8 @@ impl Engine {
                     eprintln!("stepwave: {w}");
                 }
                 self.profiles = profiles;
+                // A CLI strength override lasts until reload/restart.
+                self.strength = None;
                 if self
                     .pinned
                     .as_ref()
@@ -309,6 +311,16 @@ mod tests {
         let s = st(&mut e, Request::Reload);
         assert_eq!(s.profile, None);
         assert_eq!(s.processing, "bypass");
+    }
+
+    #[test]
+    fn reload_clears_the_strength_override() {
+        let (_d, mut e, _c) = setup(true);
+        e.select_profile("cs2");
+        let s = st(&mut e, Request::Strength(3.5));
+        assert_eq!(s.strength_db, Some(3.5));
+        let s = st(&mut e, Request::Reload);
+        assert_eq!(s.strength_db, Some(7.0), "back to the profile's strength");
     }
 
     #[test]
