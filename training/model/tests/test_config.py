@@ -25,9 +25,12 @@ def test_default_config_loads() -> None:
     assert cfg.eval.false_boost_db == 2.0
 
 
-def test_strength_matches_profile() -> None:
+def test_profile_strength_is_a_valid_runtime_setting() -> None:
+    # The profile's strength is a runtime knob: model gains scale by
+    # profile strength / training strength (stored in the .swm header), so the two may differ.
     profile = json.loads(PROFILE.read_text())
-    assert load_config(CONFIG_PATH).target.strength_db == profile["strength_db"]
+    assert 0.0 <= profile["strength_db"] <= 24.0
+    assert load_config(CONFIG_PATH).target.strength_db > 0.0
 
 
 def test_round_trip_through_dict() -> None:

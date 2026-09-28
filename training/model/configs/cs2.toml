@@ -1,4 +1,5 @@
-# Target mask (spec "Target"). strength_db must match profiles/cs2.json.
+# Target mask (spec "Target"). strength_db is the training strength written to the .swm
+# header; profiles/cs2.json may set a different runtime strength (gains scale by the ratio).
 [target]
 strength_db = 6.0
 gunfire_db = -6.0

@@ -194,15 +194,19 @@ mod tests {
 
     #[test]
     fn profile_rejects_strength_out_of_range() {
-        let cs2 = include_str!("../../profiles/cs2.json");
-        for bad in ["-1.0", "30.0"] {
-            let json = cs2.replace("\"strength_db\": 6.0", &format!("\"strength_db\": {bad}"));
+        let cs2: serde_json::Value =
+            serde_json::from_str(include_str!("../../profiles/cs2.json")).unwrap();
+        let with_strength = |s: f64| {
+            let mut v = cs2.clone();
+            v["strength_db"] = s.into();
+            v.to_string()
+        };
+        for bad in [-1.0, 30.0] {
             assert!(
-                Profile::from_json(&json).is_err(),
+                Profile::from_json(&with_strength(bad)).is_err(),
                 "strength {bad} accepted"
             );
         }
-        let zero = cs2.replace("\"strength_db\": 6.0", "\"strength_db\": 0.0");
-        assert!(Profile::from_json(&zero).is_ok());
+        assert!(Profile::from_json(&with_strength(0.0)).is_ok());
     }
 }
