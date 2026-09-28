@@ -84,7 +84,8 @@ pub struct Status {
     /// What is actually running: "model", "eq" or "bypass".
     pub processing: String,
     pub fallback_reason: Option<String>,
-    /// Negotiated sample rate of the sink, 0 until the stream is connected.
+    /// Negotiated stream rate (always 48000 once audio flows; PipeWire converts
+    /// from other graph rates), 0 until negotiated.
     pub graph_rate: u32,
     pub routed_streams: Vec<RoutedStream>,
 }

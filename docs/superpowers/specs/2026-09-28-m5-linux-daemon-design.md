@@ -90,8 +90,10 @@ data thread.
   - When no stream matches, the current profile is kept, so the processor is not rebuilt
     needlessly.
   - `stepwave profile <id>` pins a profile until `stepwave profile --auto`.
-- **Sample rate:** if the graph rate is not 48 000 Hz, the node bypasses (unity, still
-  routed) and `status` reports the rate. This follows CLAUDE.md rule 5.
+- **Sample rate:** the sink's stream format is fixed at 48 000 Hz; if the PipeWire graph
+  runs at another rate, PipeWire's adapter converts at the stream boundary, so processing
+  still runs at 48 kHz (the plugin itself never resamples). `status.graph_rate` reports
+  the negotiated stream rate.
 - **Model fallback:** the same order as the M4 CLI's `auto` mode. It tries the model,
   then the static EQ, then bypass. `status` carries the reason for each step down.
 - **Manual moves are respected:** if the user moves a routed stream elsewhere (for
@@ -150,7 +152,7 @@ If the daemon is not running, the CLI prints
 |---|---|
 | Model missing or corrupt | Static EQ, with the reason in `status` |
 | Invalid profile JSON | That profile is skipped and logged |
-| Graph rate is not 48 kHz | Unity bypass, with the rate in `status` |
+| Graph rate is not 48 kHz | PipeWire converts at the stream boundary; processing continues |
 | PipeWire restarts or the connection drops | Reconnect with backoff (0.25 s doubling to 5 s), recreate the node, re-route matching streams |
 | Daemon crashes | The sink disappears and WirePlumber returns the stream to the default device. systemd restarts the daemon (`Restart=on-failure`) |
 | Socket already in use by a live daemon | The second instance exits with an error |
