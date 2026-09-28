@@ -15,6 +15,7 @@ Run on the dev box with the daemon installed as a user service
 | 8 | Manual move is respected | Move the game stream to the device in pavucontrol; the daemon does not pull it back until the game restarts | |
 | 9 | Latency feels unchanged | Play a round; no perceptible delay between action and sound | |
 | 10 | No feedback loop | Select `stepwave` as the default output in KDE; selecting stepwave as the default output does not create a loop (stepwave-output stays on the real device, `pw-link -l`); switch back afterwards | |
+| 11 | Per-app pin is cleared | Routing the game into stepwave clears a per-app output device you pinned for it in pavucontrol (known WirePlumber behaviour); re-pin after disabling the daemon if needed | |
 
 ## Notes
 

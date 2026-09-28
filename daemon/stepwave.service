@@ -2,7 +2,10 @@
 # Install:
 #   cargo install --path daemon
 #   mkdir -p ~/.config/stepwave/profiles ~/.config/stepwave/models ~/.config/systemd/user
-#   cp profiles/*.json ~/.config/stepwave/profiles/ && cp models/*.swm ~/.config/stepwave/models/
+#   cp profiles/*.json ~/.config/stepwave/profiles/
+#   # Copy your trained models if you have them (models/*.swm is not in git);
+#   # without a model the daemon uses the profile's static EQ:
+#   #   cp models/*.swm ~/.config/stepwave/models/
 #   cp daemon/stepwave.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now stepwave
 [Unit]
