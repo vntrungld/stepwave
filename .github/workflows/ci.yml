@@ -14,6 +14,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # pipewire-sys (daemon crate) needs the PipeWire headers and libclang for bindgen.
+      - run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libclang-dev
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

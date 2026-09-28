@@ -1,0 +1,21 @@
+[package]
+name = "stepwave-daemon"
+description = "Linux stepwave daemon: PipeWire sink running core, per-app routing, CLI control"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "stepwave"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+pipewire = { version = "0.10", features = ["v0_3_49"] }
+rtrb = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+stepwave-core = { path = "../core" }
+
+[dev-dependencies]
+tempfile = "3"
