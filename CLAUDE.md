@@ -19,10 +19,10 @@ runs CachyOS/KDE (Wayland, PipeWire) and dual-boots Windows. RTX 4060 Ti 16GB fo
 ## Architecture
 
 ```
-game audio ──► host (Equalizer APO on Windows / PipeWire filter-chain on Linux)
+game audio ──► host (Equalizer APO on Windows / native PipeWire node on Linux)
                  │
                  ▼
-            plugin (VST3 / LV2)  ──► core DSP lib (Rust, no_std-friendly hot path)
+   VST3 plugin / `stepwave` daemon ──► core DSP lib (Rust, no_std-friendly hot path)
                                         ├─ STFT 20 ms window / 10 ms hop @ 48 kHz
                                         ├─ features: 32 ERB bands (log energy) + deltas, mid/side
                                         ├─ model: small GRU → per-band gain mask (0.25..4.0)
@@ -39,7 +39,7 @@ app (tray daemon) ── detects foreground game process → selects per-game mo
 |---|---|
 | `core/` | Rust crate: STFT, ERB features, model inference, mask application, limiter. The only place DSP lives. |
 | `plugins/vst3/` | VST3 wrapper (use `nih-plug`) — loaded by Equalizer APO's VST host on Windows. |
-| `plugins/lv2/` | LV2 wrapper (`nih-plug` can also export CLAP; LV2 via `lv2` crate) for PipeWire `filter-chain`. |
+| `daemon/` | Linux: `stepwave` binary — native PipeWire sink node running `core`, per-app stream routing, CLI control over a Unix socket (M5). |
 | `app/` | Tray daemon: foreground-process detection → writes active profile; Windows + Linux backends. |
 | `training/datagen/` | Python: synthetic mixture generator (see Data). |
 | `training/model/` | PyTorch model, training loop, export to weights file consumed by `core`. |
@@ -113,9 +113,11 @@ No manual labelling. Build **synthetic mixtures with known ground truth**:
   (`GetForegroundWindow` → `GetWindowThreadProcessId` → image name) and writes the active
   profile id to a small file/shared memory the plugin polls (lock-free). APO applies per
   device, not per app — document this; optional VB-Cable route for per-app.
-- **Linux:** PipeWire `filter-chain` loading the LV2 plugin as a virtual sink; a daemon watches
-  `pw-dump` / WirePlumber for streams whose `application.process.binary` matches a profile and
-  links **only that stream** into the sink (true per-app processing).
+- **Linux:** the `stepwave` daemon owns a native PipeWire virtual sink that runs `core`
+  directly (no LV2/filter-chain), watches the registry for streams whose
+  `application.process.binary` matches a profile and routes **only that stream** into the sink
+  via `target.object` metadata (true per-app processing). Controlled with `stepwave on|off|
+  toggle|mode|strength|profile|reload`. See `docs/superpowers/specs/2026-09-28-m5-linux-daemon-design.md`.
 - **Android:** out of scope for now.
 
 ## Fair-play note
@@ -132,7 +134,7 @@ check FACEIT/tournament rules.
 - [ ] M2: `training/datagen` synthetic mixer + dataset stats
 - [ ] M3: train CS2 model, export, offline A/B on real recordings (measure footstep gain, false-boost rate)
 - [ ] M4: real-time inference in `core`, benchmark (µs per 10 ms frame, must be < 1 ms)
-- [ ] M5: LV2 plugin + PipeWire filter-chain config + stream-routing daemon (Linux first — dev box)
+- [ ] M5: Linux `stepwave` daemon — native PipeWire sink running `core` + per-app stream routing + CLI control (Linux first — dev box)
 - [ ] M6: VST3 plugin + Equalizer APO setup guide + Windows tray app (for FACEIT CS2)
 - [ ] M7: PUBG model, generic FPS model, profile UI
 
