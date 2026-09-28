@@ -106,15 +106,35 @@ fn status(sock: &Path) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
-/// Start `pw-record` capturing `target` as 16-bit PCM into `out`.
+/// Start `pw-record` capturing `target` as 16-bit PCM into `out`. Passes
+/// `node.dont-fallback` so that if `target` is missing, `pw-record` fails
+/// instead of silently falling back to the default source (e.g. the mic) —
+/// confirmed by hand: without it, targeting a nonexistent node links to
+/// `alsa_input....source` instead; with it, the stream stays unconnected.
 fn record(target: &str, out: &Path) -> Child {
     Command::new("pw-record")
         .args(["--target", target, "--rate", "48000"])
         .args(["--channels", "2", "--format", "s16"])
+        .args(["-P", "{ node.dont-fallback = true }"])
         .arg(out)
         .stderr(Stdio::null())
         .spawn()
         .unwrap()
+}
+
+/// Where `pw-record`'s left input is linked from, if anywhere.
+fn pw_record_source() -> Option<String> {
+    let out = Command::new("pw-link").arg("-l").output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    while let Some(l) = lines.next() {
+        if l.trim() == "pw-record:input_FL" {
+            return lines
+                .next()
+                .map(|n| n.trim().trim_start_matches("|<-").trim().to_string());
+        }
+    }
+    None
 }
 
 /// Read 16-bit PCM samples out of a WAV file's `data` chunk. Tolerant of a
@@ -220,6 +240,12 @@ fn routed_audio_reaches_the_output() {
     // `stepwave-output:output_FL/FR` while recording).
     let out = dir.path().join("out.wav");
     let mut rec = record("stepwave-output", &out);
+    // Guard against silently recording the default source (e.g. the mic) if
+    // `stepwave-output` were ever missing: require the exact link before
+    // trusting anything this records.
+    wait_for("pw-record linked to stepwave-output", || {
+        pw_record_source().as_deref() == Some("stepwave-output:output_FL")
+    });
     sleep(Duration::from_millis(1500));
     // SIGTERM, not the `Kill` guard's SIGKILL: `pw-record` handles it by
     // closing the WAV with a correct data-chunk size before exiting.

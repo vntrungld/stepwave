@@ -68,10 +68,12 @@ fn pop_frame(ring: &mut rtrb::Consumer<f32>) -> [f32; 2] {
         let r = ring.pop().unwrap_or(0.0);
         [l, r]
     } else {
-        // Underrun, or a lone sample stranded by a race with the capture side
-        // (which only ever pushes whole frames): drop it so the ring stays
-        // frame-aligned, and output silence for this frame.
-        let _ = ring.pop();
+        // Underrun, or a lone L sample stranded because capture pushes L and
+        // R as two separate `push` calls and playback ran in between: leave
+        // it in the ring rather than popping it. Its partner always arrives
+        // next (capture only ever pushes whole frames), so alignment
+        // self-heals on the next call instead of staying permanently offset
+        // by one sample for the rest of the session.
         [0.0, 0.0]
     }
 }
@@ -294,9 +296,41 @@ mod tests {
     fn odd_sample_count_never_splits_a_frame() {
         // One stray sample beyond a whole number of frames (should not happen
         // in practice, since the capture side only ever pushes pairs, but the
-        // function must still never claim more samples than are available).
-        let available_samples = (TARGET_FRAMES + 1000) * CHANNELS + 1;
-        let discard = frames_to_discard(available_samples, 128);
-        assert!(discard * CHANNELS <= available_samples);
+        // function must still never claim more samples than are available,
+        // and the trim it computes must still land exactly on target).
+        for requested in [0, 128] {
+            let available_frames = TARGET_FRAMES + 1000;
+            let available_samples = available_frames * CHANNELS + 1;
+            let discard = frames_to_discard(available_samples, requested);
+            assert!(
+                discard * CHANNELS <= available_samples,
+                "discard must never claim more samples than are available (requested {requested})"
+            );
+            assert_eq!(
+                available_frames - discard,
+                TARGET_FRAMES + requested,
+                "the odd stray sample must not shift where the trim lands (requested {requested})"
+            );
+        }
+    }
+
+    #[test]
+    fn underrun_does_not_consume_the_stranded_partner_sample() {
+        // Capture pushes L and R as two separate `push` calls. If the
+        // playback side runs in between (or capture is simply slow), the
+        // ring can briefly hold a lone L sample. `pop_frame` must leave it
+        // there rather than discarding it: its partner always arrives next,
+        // so alignment self-heals instead of staying offset by one sample
+        // for the rest of the session (breaking the shared L/R mask).
+        let (mut tx, mut rx) = rtrb::RingBuffer::<f32>::new(4);
+        tx.push(1.0).unwrap(); // L only: R has not arrived yet.
+        assert_eq!(pop_frame(&mut rx), [0.0, 0.0], "silence while underrun");
+        assert_eq!(rx.slots(), 1, "the lone L sample must not be discarded");
+        tx.push(2.0).unwrap(); // R arrives.
+        assert_eq!(
+            pop_frame(&mut rx),
+            [1.0, 2.0],
+            "L and R now popped together"
+        );
     }
 }
