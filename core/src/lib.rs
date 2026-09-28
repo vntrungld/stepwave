@@ -8,6 +8,7 @@ pub mod limiter;
 pub mod mask;
 pub mod processor;
 pub mod profile;
+pub mod select;
 pub mod smoother;
 pub mod stft;
 pub mod swm;

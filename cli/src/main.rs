@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use stepwave_core::mask::UnityMask;
+use stepwave_core::select::{self, build, resolve_model_path};
 use stepwave_core::stft::{HOP, SAMPLE_RATE};
-use stepwave_core::{Processor, Profile, SwmModel};
+use stepwave_core::Profile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum Mode {
@@ -64,8 +64,17 @@ fn main() -> Result<()> {
     } else {
         args.mode.unwrap_or(Mode::Auto)
     };
-    let model_path = resolve_model(args.model.as_deref(), &profile, &profile_path);
-    let (mut processor, used) = build_processor(mode, &profile, &model_path)?;
+    let model_path = args
+        .model
+        .clone()
+        .unwrap_or_else(|| resolve_model_path(&profile, &profile_path));
+    let built = build(mode.into(), &profile, &model_path, true)
+        .with_context(|| format!("loading model {}", model_path.display()))?;
+    if let Some(reason) = &built.fallback_reason {
+        eprintln!("warning: {reason}");
+    }
+    let used = built.processing.as_str();
+    let mut processor = built.processor;
 
     // Feed `latency` samples of silence so the tail comes out, then drop the head.
     let latency = processor.latency_samples();
@@ -101,55 +110,15 @@ fn resolve_profile(arg: &str) -> PathBuf {
 
 /// A relative `model` in a profile resolves against the parent of the profile's directory
 /// (`<root>/profiles/x.json` → `<root>/<model>`).
-fn resolve_model(arg: Option<&Path>, profile: &Profile, profile_path: &Path) -> PathBuf {
-    if let Some(path) = arg {
-        return path.to_path_buf();
-    }
-    let model = Path::new(&profile.model);
-    if model.is_absolute() {
-        return model.to_path_buf();
-    }
-    let root = profile_path
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new("."));
-    root.join(model)
-}
-
-fn build_processor(
-    mode: Mode,
-    profile: &Profile,
-    model_path: &Path,
-) -> Result<(Processor, &'static str)> {
-    let eq = || Processor::new(profile, SAMPLE_RATE);
-    Ok(match mode {
-        Mode::Bypass => (
-            Processor::with_mask(Box::new(UnityMask), SAMPLE_RATE)?,
-            "bypass",
-        ),
-        Mode::Eq => (eq()?, "eq"),
-        Mode::Model => {
-            let model = SwmModel::load(model_path)
-                .with_context(|| format!("loading model {}", model_path.display()))?;
-            (
-                Processor::with_model(profile, &model, SAMPLE_RATE)?,
-                "model",
-            )
+impl From<Mode> for select::Mode {
+    fn from(m: Mode) -> Self {
+        match m {
+            Mode::Auto => select::Mode::Auto,
+            Mode::Model => select::Mode::Model,
+            Mode::Eq => select::Mode::Eq,
+            Mode::Bypass => select::Mode::Bypass,
         }
-        Mode::Auto => match SwmModel::load(model_path) {
-            Ok(model) => (
-                Processor::with_model(profile, &model, SAMPLE_RATE)?,
-                "model",
-            ),
-            Err(err) => {
-                eprintln!(
-                    "warning: model {} unusable ({err}); using static EQ",
-                    model_path.display()
-                );
-                (eq()?, "eq")
-            }
-        },
-    })
+    }
 }
 
 fn read_wav(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
