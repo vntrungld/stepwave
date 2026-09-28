@@ -25,16 +25,21 @@ type OnSelect = Box<dyn Fn(&str)>;
 
 struct State {
     router: Router,
-    metadata: Option<(Metadata, MetadataListener)>,
-    clients: HashMap<u32, (Client, ClientListener)>,
+    /// Listener before the object it listens on, so it unhooks first on drop
+    /// (see the comment on `Graph` below).
+    metadata: Option<(MetadataListener, Metadata)>,
+    clients: HashMap<u32, (ClientListener, Client)>,
     /// Routes decided before the `default` metadata was bound.
     pending: Vec<u32>,
     on_select: OnSelect,
 }
 
+/// Field order is drop order: the registry listener must unhook before the
+/// registry itself is destroyed, for the same reason as `node::Node` (a
+/// listener dropped after the object it watches is a use-after-free).
 pub struct Graph {
-    _registry: RegistryRc,
     _listener: RegistryListener,
+    _registry: RegistryRc,
     state: Rc<RefCell<State>>,
 }
 
@@ -57,7 +62,7 @@ fn dispatch(state: &Rc<RefCell<State>>, event: Event) {
         match action {
             Action::Route { stream } => {
                 let st = state.borrow();
-                if let Some((md, _)) = st.metadata.as_ref() {
+                if let Some((_, md)) = st.metadata.as_ref() {
                     md.set_property(stream, "target.object", None, Some(SINK_NAME));
                 } else {
                     drop(st);
@@ -112,7 +117,7 @@ pub fn create(
                             }
                         })
                         .register();
-                    st_global.borrow_mut().clients.insert(id, (client, l));
+                    st_global.borrow_mut().clients.insert(id, (l, client));
                 }
                 ObjectType::Node if props.get("media.class") == Some("Stream/Output/Audio") => {
                     if let Some(client) = props.get("client.id").and_then(|c| c.parse().ok()) {
@@ -144,7 +149,7 @@ pub fn create(
                     for stream in pending {
                         md.set_property(stream, "target.object", None, Some(SINK_NAME));
                     }
-                    st_global.borrow_mut().metadata = Some((md, l));
+                    st_global.borrow_mut().metadata = Some((l, md));
                 }
                 _ => {}
             }
@@ -157,8 +162,8 @@ pub fn create(
         .register();
 
     Ok(Graph {
-        _registry: registry,
         _listener: listener,
+        _registry: registry,
         state,
     })
 }
