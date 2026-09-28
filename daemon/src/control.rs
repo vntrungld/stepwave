@@ -1,11 +1,16 @@
 //! Unix-socket control channel: the daemon serves, CLI subcommands connect.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::protocol::{Request, Response};
+
+/// Hard cap on a single request/response line, so a client that never sends a
+/// newline (or sends an oversized line) cannot grow our read buffer without bound.
+const MAX_LINE: u64 = 64 * 1024;
 
 /// `$XDG_RUNTIME_DIR/stepwave.sock`.
 pub fn default_socket_path() -> Result<PathBuf, String> {
@@ -28,30 +33,42 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
     UnixListener::bind(path)
 }
 
-/// Serve requests on a background thread: one request line, one response line per
-/// connection. `handler` is called on that thread.
+/// Serve requests on a background thread: each accepted connection is handled on its
+/// own spawned thread (one request line, one response line per connection), so a
+/// client that connects and stalls cannot block any other connection. `handler` is
+/// called on those per-connection threads.
 pub fn serve<F>(listener: UnixListener, handler: F) -> std::thread::JoinHandle<()>
 where
-    F: Fn(Request) -> Response + Send + 'static,
+    F: Fn(Request) -> Response + Send + Sync + 'static,
 {
+    let handler = Arc::new(handler);
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { continue };
-            if let Err(e) = handle_conn(conn, &handler) {
-                eprintln!("stepwave: control connection: {e}");
-            }
+            let handler = Arc::clone(&handler);
+            std::thread::spawn(move || {
+                if let Err(e) = handle_conn(conn, &*handler) {
+                    eprintln!("stepwave: control connection: {e}");
+                }
+            });
         }
     })
 }
 
 fn handle_conn<F: Fn(Request) -> Response>(conn: UnixStream, handler: &F) -> io::Result<()> {
     conn.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let mut reader = BufReader::new(conn.try_clone()?);
+    let mut reader = BufReader::new(conn.try_clone()?.take(MAX_LINE));
     let mut line = String::new();
     reader.read_line(&mut line)?;
-    let response = match Request::parse(&line) {
-        Ok(req) => handler(req),
-        Err(e) => Response::err(e),
+    let response = if line.ends_with('\n') {
+        match Request::parse(&line) {
+            Ok(req) => handler(req),
+            Err(e) => Response::err(e),
+        }
+    } else {
+        Response::err(format!(
+            "request line exceeds {MAX_LINE} bytes or is missing a newline"
+        ))
     };
     let mut conn = conn;
     conn.write_all(response.to_line().as_bytes())
@@ -91,9 +108,14 @@ pub fn request(path: &Path, req: &Request) -> Result<Response, ClientError> {
     line.push('\n');
     conn.write_all(line.as_bytes()).map_err(ClientError::Io)?;
     let mut reply = String::new();
-    BufReader::new(conn)
+    BufReader::new(conn.take(MAX_LINE))
         .read_line(&mut reply)
         .map_err(ClientError::Io)?;
+    if !reply.ends_with('\n') {
+        return Err(ClientError::BadResponse(format!(
+            "response exceeds {MAX_LINE} bytes or is missing a newline"
+        )));
+    }
     serde_json::from_str(reply.trim()).map_err(|e| ClientError::BadResponse(e.to_string()))
 }
 
@@ -158,5 +180,44 @@ mod tests {
         let _l = bind(&path).unwrap();
         // A live one is refused.
         assert_eq!(bind(&path).unwrap_err().kind(), io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
+    fn silent_client_does_not_block_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sock");
+        serve(bind(&path).unwrap(), |_| Response::ok(status()));
+        // Connect but never write anything.
+        let _silent = UnixStream::connect(&path).unwrap();
+        let start = std::time::Instant::now();
+        let r = request(&path, &Request::Status).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "took {:?}",
+            start.elapsed()
+        );
+        assert!(r.ok);
+    }
+
+    #[test]
+    fn oversized_request_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sock");
+        serve(bind(&path).unwrap(), |_| Response::ok(status()));
+
+        let mut conn = UnixStream::connect(&path).unwrap();
+        let mut writer = conn.try_clone().unwrap();
+        let writer_thread = std::thread::spawn(move || {
+            // No newline: an oversized, unterminated "line".
+            let _ = writer.write_all(&vec![b'a'; 64 * 1024 + 4096]);
+        });
+        let mut reply = String::new();
+        let _ = BufReader::new(&mut conn).read_line(&mut reply);
+        assert!(reply.contains("\"ok\":false"), "{reply}");
+        writer_thread.join().unwrap();
+
+        // The server keeps serving other connections afterwards.
+        let r = request(&path, &Request::Status).unwrap();
+        assert!(r.ok);
     }
 }
