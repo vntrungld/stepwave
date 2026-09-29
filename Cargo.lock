@@ -1078,6 +1078,18 @@ dependencies = [
  "serde",
  "serde_json",
  "stepwave-core",
+ "stepwave-host",
+ "tempfile",
+]
+
+[[package]]
+name = "stepwave-host"
+version = "0.1.0"
+dependencies = [
+ "rtrb",
+ "serde",
+ "serde_json",
+ "stepwave-core",
  "tempfile",
 ]
 
