@@ -23,6 +23,10 @@
 //! so playback starts at the target latency. If the ring runs dry (a capture stall) it primes
 //! again; if it overfills past `RESYNC_FACTOR · target` (a render stall) it drops the excess.
 //! Both count in `resyncs`. The learned clock ratio (the integral term) survives a resync.
+//! `Render::reset` (a device change) is not a resync: it recomputes the target from the
+//! declared periods if both are known (else `MIN_TARGET`) and only trims backlog above that
+//! target, so a ring already at or above the real target keeps playing immediately instead of
+//! being cut down and re-primed.
 //!
 //! Real-time safe: `Capture::push` and `Render::render` never allocate, lock or panic.
 
@@ -281,13 +285,22 @@ impl Render {
 
     /// Start over after a device change: forget any observed packet/request sizes (so the
     /// observed-size fallback target starts over at `MIN_TARGET` rather than keeping a stale
-    /// high-water mark), drop the backlog to that target, forget the learned clock ratio (the
-    /// render clock changed) and prime again. Declared device periods (`set_period`) are left
-    /// alone — the physical device period does not change across a reset.
+    /// high-water mark), drop any backlog above the target, forget the learned clock ratio (the
+    /// render clock changed) and prime again. Declared device periods (`set_period`) survive a
+    /// reset — the physical device period does not change — so if both are already known the
+    /// target is recomputed from them rather than dropped to `MIN_TARGET`: doing otherwise would
+    /// needlessly discard good audio down to `MIN_TARGET` only to re-prime back up to the real
+    /// target on the very next `render`, adding a silent gap to every device-change reset.
     pub fn reset(&mut self) {
         self.stats.max_packet.store(0, Relaxed);
-        self.target = MIN_TARGET;
-        self.stats.target_frames.store(MIN_TARGET as u32, Relaxed);
+        let cap_period = self.stats.capture_period.load(Relaxed);
+        let ren_period = self.stats.render_period.load(Relaxed);
+        self.target = if cap_period > 0 && ren_period > 0 {
+            target_for(cap_period.max(ren_period) as usize)
+        } else {
+            MIN_TARGET
+        };
+        self.stats.target_frames.store(self.target as u32, Relaxed);
         let fill = self.fill();
         if fill > self.target {
             self.discard(fill - self.target);
@@ -507,6 +520,53 @@ mod tests {
         assert_eq!(
             stats.target_frames() as usize,
             (2 * 100 + CHUNK).max(MIN_TARGET)
+        );
+    }
+
+    #[test]
+    fn reset_keeps_the_declared_target() {
+        let (mut cap, mut ren, stats) = channel();
+        cap.set_period(480);
+        ren.set_period(480);
+        let expected = 2 * 480 + CHUNK;
+        let mut out = vec![0.0f32; 480 * CHANNELS];
+
+        // Fill the ring well past the target and render once, so the target is established
+        // (`stats.target_frames()`) and playback has actually started (priming cleared).
+        for _ in 0..4 {
+            cap.push(&vec![0.3f32; 480 * CHANNELS]);
+        }
+        ren.render(&mut out);
+        assert_eq!(stats.target_frames() as usize, expected);
+
+        // Top the ring back up above the target before reset (the render above consumed some).
+        for _ in 0..4 {
+            cap.push(&vec![0.3f32; 480 * CHANNELS]);
+        }
+        let fill_before = ren.fill();
+        assert!(
+            fill_before >= expected,
+            "test setup: fill {fill_before} target {expected}"
+        );
+
+        ren.reset();
+
+        assert_eq!(
+            stats.target_frames() as usize,
+            expected,
+            "reset dropped the declared target"
+        );
+        assert!(
+            ren.fill() >= expected,
+            "reset cut the fill below the target: {}",
+            ren.fill()
+        );
+
+        // Plays immediately: no re-prime gap.
+        ren.render(&mut out);
+        assert!(
+            out.iter().any(|&v| v != 0.0),
+            "re-primed after reset instead of playing immediately"
         );
     }
 }
