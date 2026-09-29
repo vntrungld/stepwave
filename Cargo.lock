@@ -1157,7 +1157,6 @@ dependencies = [
  "rtrb",
  "serde",
  "serde_json",
- "stepwave-core",
  "stepwave-host",
  "tempfile",
 ]
