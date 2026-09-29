@@ -15,8 +15,9 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// Exit code `main` uses when `app::run` fails because another stepwave instance already owns
-/// the control pipe (`AddrInUse` from `pipe::bind`).
-pub const ADDR_IN_USE_CODE: i32 = 3;
+/// the control pipe (`AddrInUse` from `pipe::bind`). 75 (`EX_TEMPFAIL`) rather than a small
+/// number: 3 is what MSVC's `abort()` exits with, which must count as a crash.
+pub const ADDR_IN_USE_CODE: i32 = 75;
 
 /// At most this many restarts within any trailing `WINDOW`.
 const MAX_RESTARTS: usize = 3;
@@ -242,6 +243,17 @@ mod tests {
             should_restart(&mut history, after, Some(1)),
             Decision::Restart,
             "old crashes must have fallen out of the window"
+        );
+    }
+
+    #[test]
+    fn addr_in_use_code_does_not_collide_with_abort() {
+        // MSVC's abort() exits with 3; that is a crash and must be restarted.
+        assert_ne!(ADDR_IN_USE_CODE, 3);
+        let mut history = VecDeque::new();
+        assert_eq!(
+            should_restart(&mut history, Instant::now(), Some(3)),
+            Decision::Restart
         );
     }
 

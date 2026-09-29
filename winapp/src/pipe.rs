@@ -40,7 +40,11 @@ where
     let handler = Arc::new(handler);
     std::thread::spawn(move || {
         for conn in listener.incoming() {
-            let Ok(conn) = conn else { continue };
+            let Ok(conn) = conn else {
+                // E.g. all pipe instances busy: back off instead of spinning a core.
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            };
             let handler = handler.clone();
             std::thread::spawn(move || {
                 if let Err(e) = handle_conn(conn, &*handler) {
