@@ -20,7 +20,7 @@ and setting CS2's output device automatically.
 |---|---|---|
 | Hosting | Standalone app, VB-Cable in, WASAPI out | Processes only the game (like M5), is an ordinary user-mode program, reuses M5 code, and does not depend on Equalizer APO |
 | Control | CLI `stepwave.exe status/on/off/toggle/mode/strength/profile/reload`, bound to a hotkey by the user | Same UX as M5; the base for the M6b tray app |
-| Latency | About 50–60 ms total accepted (revised from 35–45 ms during planning; see "Latency") | Only the game is processed, all in user mode |
+| Latency | Estimated ~50–80 ms total accepted (revised from 35–45 ms during planning; see "Latency"); to be measured | Only the game is processed, all in user mode |
 | Game selection | The user sets CS2's output to "CABLE Input" once in Windows' Volume mixer | Windows remembers it; automating this is M6b |
 | Profile | Fixed, default `cs2`, changed with `stepwave profile` | Foreground-game switching is M6b |
 
@@ -118,7 +118,8 @@ VB-Cable and the real device run on independent clocks, which typically differ b
 
 ### Latency
 
-The total is about **50–60 ms**:
+The total is estimated at **~50–80 ms** (processing 20 ms + ring ~20 ms + capture/render
+engine buffers); measure it with the M6a checklist (`docs/measurements/m6a-checklist.md`):
 - 960 samples (20 ms) of algorithmic latency;
 - the ring target, about 21 ms with Windows' default 10 ms shared-mode periods;
 - the two devices' own engine buffers.

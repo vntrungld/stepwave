@@ -20,6 +20,10 @@ Open the classic Sound Control Panel (`mmsys.cpl`):
 - **Playback** tab → *CABLE Input* → Properties → Advanced → **2 channel, 24 bit, 48000 Hz**.
 - **Recording** tab → *CABLE Output* → Properties → Advanced → **2 channel, 24 bit, 48000 Hz**.
 - **Playback** tab → your headset/speakers → Properties → Advanced → **48000 Hz**.
+- Make sure your headset/speakers — **not CABLE Input** — is the Default Device (Playback tab →
+  right-click → **Set as Default Device**). stepwave plays to the default device and refuses
+  CABLE Input (that would feed its output back into itself); `status` then shows a note until
+  you pick a real device.
 
 stepwave asks Windows for 48 kHz float stereo and Windows converts if a device differs, but
 matching formats avoids an extra conversion.
@@ -96,7 +100,9 @@ Check the rest only when it does not:
 
 ## Latency
 
-Total added latency is about 50–60 ms with Windows' default 10 ms device periods: 20 ms of
-processing window, about 21 ms of buffer between the two device clocks (two periods plus a
-margin, see `buffer:` in `status`), and the two devices' own buffers. That is the price of
-processing only the game; bypass has the same latency, so A/B comparisons are fair.
+Total added latency is estimated at ~50–80 ms with Windows' default 10 ms device periods
+(processing 20 ms + ring ~20 ms + capture/render engine buffers): 20 ms of processing window,
+about 21 ms of buffer between the two device clocks (two periods plus a margin, see `buffer:`
+in `status`), and the two devices' own buffers. Measure it with the "Measured latency" row of
+`docs/measurements/m6a-checklist.md`. That is the price of processing only the game; bypass
+has the same latency, so A/B comparisons are fair.
