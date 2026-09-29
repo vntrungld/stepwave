@@ -57,7 +57,12 @@ fn handle_conn<F: Fn(Request) -> Response>(conn: Stream, handler: &F) -> io::Res
     let _ = conn.set_recv_timeout(Some(Duration::from_secs(5)));
     let mut reader = BufReader::new(conn.take(MAX_LINE));
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    let bytes_read = reader.read_line(&mut line)?;
+    if is_silent_probe(bytes_read) {
+        // The peer (e.g. bind()'s live-instance check) connected and disconnected without
+        // writing anything. Nothing to reply to, and no error: this is expected traffic.
+        return Ok(());
+    }
     let response = if !line.ends_with('\n') {
         Response::err(format!(
             "request longer than {MAX_LINE} bytes or not newline-terminated"
@@ -70,6 +75,13 @@ fn handle_conn<F: Fn(Request) -> Response>(conn: Stream, handler: &F) -> io::Res
     };
     let mut conn = reader.into_inner().into_inner();
     conn.write_all(response.to_line().as_bytes())
+}
+
+/// A connection that reached EOF on its very first read (0 bytes) connected and disconnected
+/// without writing anything, e.g. `bind()`'s live-instance probe. It gets a quiet close rather
+/// than the "not newline-terminated" error reply.
+fn is_silent_probe(bytes_read: usize) -> bool {
+    bytes_read == 0
 }
 
 #[derive(Debug)]
@@ -151,6 +163,22 @@ mod tests {
         assert_eq!(r.status.unwrap().processing, "model");
         let r = request(&pipe, &Request::On).unwrap();
         assert_eq!(r.error.as_deref(), Some("only status"));
+    }
+
+    #[test]
+    fn is_silent_probe_is_only_true_on_empty_read() {
+        assert!(is_silent_probe(0));
+        assert!(!is_silent_probe(1));
+    }
+
+    #[test]
+    fn silent_probe_connection_is_ignored_and_does_not_block_others() {
+        let pipe = unique("probe");
+        serve(bind(&pipe).unwrap(), |_| Response::ok(status()));
+        // Connect and drop without writing, like bind()'s live-instance probe.
+        drop(Stream::connect(name(&pipe).unwrap()).unwrap());
+        // A normal request still succeeds afterward.
+        assert!(request(&pipe, &Request::Status).unwrap().ok);
     }
 
     #[test]
