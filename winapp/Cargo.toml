@@ -20,7 +20,12 @@ stepwave-host = { path = "../host" }
 
 [target.'cfg(windows)'.dependencies]
 wasapi = "0.24"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3"

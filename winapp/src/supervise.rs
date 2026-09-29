@@ -57,7 +57,65 @@ pub fn should_restart(
 mod spawn {
     use super::*;
     use std::ffi::OsString;
-    use std::process::ExitCode;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::{Child, ExitCode};
+
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// Create an anonymous Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so every
+    /// process later assigned to it dies when this supervisor's last handle to the job closes
+    /// — i.e. when the supervisor exits, however it exits (including killed by Task Manager or
+    /// Task Scheduler's "End"). Without this, killing only the supervisor leaves the
+    /// `--supervised` child running and holding the control pipe. Best effort: `None` if
+    /// creation or configuration fails; the caller then just runs unsupervised in this respect.
+    /// The handle is intentionally never closed: it must outlive every child assigned to it,
+    /// which is exactly the supervisor's own lifetime, so the OS reclaims it on process exit.
+    fn create_kill_on_close_job() -> Option<HANDLE> {
+        // SAFETY: no security attributes, no name (anonymous job object); the returned handle
+        // is checked (via `.ok()`) before use.
+        let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.ok()?;
+        let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // SAFETY: `job` was just created above; `info` is a valid, correctly sized
+        // JOBOBJECT_EXTENDED_LIMIT_INFORMATION matching `JobObjectExtendedLimitInformation`.
+        let result = unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if let Err(e) = result {
+            eprintln!("stepwave: configuring the supervisor job object: {e}");
+            return None;
+        }
+        Some(job)
+    }
+
+    /// Best effort: put `child` in `job` so it dies with this process. Logs and continues on
+    /// failure — the child still runs, just without that guarantee. There is a brief window
+    /// between spawn and this call where the child runs outside the job; acceptable.
+    fn assign_to_job(job: Option<HANDLE>, child: &Child) {
+        let Some(job) = job else { return };
+        let process = HANDLE(child.as_raw_handle());
+        // SAFETY: `process` is the live child's handle from `Child::as_raw_handle`, and `job`
+        // was created by `create_kill_on_close_job` above.
+        if let Err(e) = unsafe { AssignProcessToJobObject(job, process) } {
+            eprintln!("stepwave: assigning stepwave.exe to the supervisor job object: {e}");
+        }
+    }
 
     /// Run `current_exe() <args> --supervised` in a loop, restarting per `should_restart`.
     /// `args` is the process's own argv (without the program name), unchanged; the caller only
@@ -70,16 +128,25 @@ mod spawn {
                 return ExitCode::FAILURE;
             }
         };
+        let job = create_kill_on_close_job();
         let mut history: VecDeque<Instant> = VecDeque::new();
         loop {
-            let status = match std::process::Command::new(&exe)
+            let mut child = match std::process::Command::new(&exe)
                 .args(args)
                 .arg("--supervised")
-                .status()
+                .spawn()
             {
-                Ok(s) => s,
+                Ok(c) => c,
                 Err(e) => {
                     eprintln!("stepwave: spawning stepwave.exe: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            assign_to_job(job, &child);
+            let status = match child.wait() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("stepwave: waiting for stepwave.exe: {e}");
                     return ExitCode::FAILURE;
                 }
             };

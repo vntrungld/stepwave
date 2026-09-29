@@ -11,6 +11,7 @@ use std::time::Duration;
 use stepwave_host::audio::AudioCore;
 use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
+use crate::backoff;
 use crate::drift;
 
 /// Friendly-name fragment that identifies VB-Cable's capture endpoint.
@@ -77,14 +78,19 @@ fn find_capture(enumerator: &DeviceEnumerator) -> Res<Option<(wasapi::Device, St
 pub fn capture_thread(shared: Arc<Shared>, mut core: AudioCore, mut ring: drift::Capture) {
     let _ = wasapi::initialize_mta().ok();
     boost_thread();
-    let mut backoff = Duration::from_millis(250);
+    let mut backoff_dur = backoff::INITIAL;
     while !shared.stop.load(Relaxed) {
-        match capture_session(&shared, &mut core, &mut ring) {
-            Ok(()) => backoff = Duration::from_millis(250),
+        let mut started = false;
+        match capture_session(&shared, &mut core, &mut ring, &mut started) {
+            Ok(()) => backoff_dur = backoff::INITIAL,
             Err(e) => {
                 set(&shared.capture_error, Some(e.to_string()));
-                std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(Duration::from_secs(5));
+                // A session that actually started ran until a mid-stream fault, not because the
+                // device was never found; back off only briefly and forget any backoff grown
+                // while the device was missing earlier (see `backoff`'s module doc comment).
+                let (sleep, next) = backoff::next(backoff_dur, started);
+                std::thread::sleep(sleep);
+                backoff_dur = next;
             }
         }
         shared.capture_rate.store(0, Relaxed);
@@ -92,7 +98,12 @@ pub fn capture_thread(shared: Arc<Shared>, mut core: AudioCore, mut ring: drift:
     }
 }
 
-fn capture_session(shared: &Shared, core: &mut AudioCore, ring: &mut drift::Capture) -> Res<()> {
+fn capture_session(
+    shared: &Shared,
+    core: &mut AudioCore,
+    ring: &mut drift::Capture,
+    started: &mut bool,
+) -> Res<()> {
     let enumerator = DeviceEnumerator::new()?;
     let Some((device, name)) = find_capture(&enumerator)? else {
         return Err(format!("{CABLE_CAPTURE} not found — install VB-Cable").into());
@@ -114,6 +125,8 @@ fn capture_session(shared: &Shared, core: &mut AudioCore, ring: &mut drift::Capt
     let mut bytes = vec![0u8; frames * BYTES_PER_FRAME];
     let mut samples = vec![0f32; frames * CHANNELS];
     client.start_stream()?;
+    // Set once per session (not per packet): the RT loop below never touches this flag.
+    *started = true;
     set(&shared.capture_name, Some(name));
     set(&shared.capture_error, None);
     shared.capture_rate.store(RATE as u32, Relaxed);

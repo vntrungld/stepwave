@@ -41,14 +41,17 @@ fn handle(engine: &Mutex<Engine>, shared: &Shared, drift: &DriftStats, req: Requ
         return Response::err("internal error: engine lock poisoned");
     };
     // `profile --auto` has no game detection to fall back on in M6a: keep the current profile
-    // and only clear the pin.
-    let keep = matches!(req, Request::Profile(None)).then(|| engine.status(0, &[]).profile);
+    // and only clear the pin. Re-pin it as the auto profile *before* `engine.handle` clears the
+    // pin, so that call's own `apply()` sees an unchanged active profile and does not rebuild a
+    // processor for the (possibly different) old auto profile only to rebuild it again right
+    // after for this one.
+    if matches!(req, Request::Profile(None)) {
+        if let Some(id) = engine.status(0, &[]).profile {
+            engine.select_profile(&id);
+        }
+    }
     let rate = shared.capture_rate.load(Relaxed);
     let mut response = engine.handle(req, rate, &[]);
-    if let Some(Some(id)) = keep {
-        engine.select_profile(&id);
-        response = Response::ok(engine.status(rate, &[]));
-    }
     if let Some(status) = response.status.as_mut() {
         status.io = Some(io_status(shared, drift));
         if let Some(err) = shared.capture_error.lock().ok().and_then(|g| g.clone()) {
