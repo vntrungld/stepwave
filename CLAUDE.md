@@ -113,7 +113,7 @@ No manual labelling. Build **synthetic mixtures with known ground truth**:
 - **Windows:** `stepwave.exe` (M6a) — CS2's output device is set to VB-Cable's "CABLE Input"
   once in the Volume mixer; the app captures "CABLE Output" via WASAPI, processes it with `core`
   and renders to the default device, compensating the two devices' clock drift with a small
-  adaptive resampler. Only the game is processed. Total latency ≈ 35–45 ms (accepted trade-off).
+  adaptive resampler. Only the game is processed. Total latency ≈ 50–60 ms (accepted trade-off).
   Equalizer APO was rejected (VST2-only host, whole-device processing, code inside audiodg).
   See `docs/superpowers/specs/2026-09-29-m6a-windows-app-design.md`. M6b adds the tray app.
 - **Linux:** the `stepwave` daemon owns a native PipeWire virtual sink that runs `core`

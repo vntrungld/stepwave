@@ -20,7 +20,7 @@ and setting CS2's output device automatically.
 |---|---|---|
 | Hosting | Standalone app, VB-Cable in, WASAPI out | Processes only the game (like M5), is an ordinary user-mode program, reuses M5 code, and does not depend on Equalizer APO |
 | Control | CLI `stepwave.exe status/on/off/toggle/mode/strength/profile/reload`, bound to a hotkey by the user | Same UX as M5; the base for the M6b tray app |
-| Latency | About 35–45 ms total accepted | See "Latency" |
+| Latency | About 50–60 ms total accepted (revised from 35–45 ms during planning; see "Latency") | Only the game is processed, all in user mode |
 | Game selection | The user sets CS2's output to "CABLE Input" once in Windows' Volume mixer | Windows remembers it; automating this is M6b |
 | Profile | Fixed, default `cs2`, changed with `stepwave profile` | Foreground-game switching is M6b |
 
@@ -64,10 +64,12 @@ stepwave.exe <command> ──(named pipe \\.\pipe\stepwave, JSON lines)──►
   and the workspace builds it only when the target is Linux.
 - **`winapp/` (new, Windows):** the binary `stepwave.exe`, with these modules:
   - `wasapi_io`: capture and render streams (crate `wasapi`), event-driven, shared mode.
-  - `drift`: an adaptive resampler (crate `rubato`) plus a controller that keeps the ring
-    fill at a target.
-  - `pipe`: the named-pipe control server and client (crate `interprocess`), with the same
-    JSON-line protocol and `ClientError` semantics as M5's `control`.
+  - `drift`: `rubato::Slip` (a drift-compensating frame slipper, no delay) plus a controller
+    that keeps the ring fill at an adaptive target.
+  - `pipe`: the control server and client over an `interprocess` local socket (a named pipe on
+    Windows, a Unix socket elsewhere, so it is tested on Linux too), with the same JSON-line
+    protocol and `ClientError` semantics as M5's `control`.
+  - `install`: the Task Scheduler logon task.
   - `app`: wiring, device discovery, reconnect.
   - `main`: the CLI.
 
@@ -77,8 +79,8 @@ stepwave.exe <command> ──(named pipe \\.\pipe\stepwave, JSON lines)──►
 ### Data flow and threads
 
 - **Capture thread.** It runs under the "Pro Audio" MMCSS class, opens "CABLE Output" as a
-  WASAPI shared-mode event-driven capture stream (48 kHz, float32, stereo) and waits on its
-  event. For each packet it runs `AudioCore::process_interleaved` in place and pushes whole
+  WASAPI shared-mode event-driven capture stream (48 kHz, float32, stereo, with the Windows
+  engine's automatic format conversion enabled) and waits on its event. For each packet it runs `AudioCore::process_interleaved` in place and pushes whole
   stereo frames into an `rtrb` ring (1 s capacity). If the ring is full it drops whole frames.
 - **Render thread.** It runs under the same MMCSS class and opens the current default render
   endpoint in shared, event-driven mode. On each event it asks for the free frames, pulls
@@ -95,24 +97,37 @@ stepwave.exe <command> ──(named pipe \\.\pipe\stepwave, JSON lines)──►
 VB-Cable and the real device run on independent clocks, which typically differ by 10 to
 500 ppm. Left alone, the ring slowly fills (latency grows) or drains (underrun clicks).
 
-- **Resampler.** The render side resamples with a `rubato` asynchronous resampler. Its ratio
-  is adjusted every render callback by a PI controller that drives the ring fill toward
-  `TARGET_FILL` frames (480, which is 10 ms).
-- **Clamp.** The ratio stays within ±1000 ppm, far below audibility. This is sample-rate
-  *conversion between two clocks outside the processing chain*, so it does not break
+- **Slip.** The render side pulls 64-frame chunks through `rubato::Slip` (fixed output). Now
+  and then Slip inserts or drops one frame, hidden by a short crossfade. This is a
+  drift-compensating copy rather than a filter, so it adds no delay.
+- **Controller.** A PI controller sets Slip's ratio each chunk from a smoothed ring fill
+  (0.5 s time constant). KP is 2 ppm/frame (about a 10 s loop), KI is 0.07. The ratio is
+  clamped to ±1000 ppm with anti-windup.
+- **Target fill.** Capture arrives in device-period packets and render asks for device-period
+  buffers. Because the clocks differ, their phases slide through each other, and now and
+  then two render periods fall between two capture packets. The ring must therefore hold
+  about two periods plus a chunk. The target adapts to the largest packet or request seen:
+  `max(2 · period + 64, 256)` frames, which is about 21 ms with 10 ms periods and about 7 ms
+  with 3 ms periods.
+- **Priming and resync.** The render side outputs silence until the ring reaches the target.
+  If it runs dry (capture stall) it primes again. If it holds more than 4 × target (render
+  stall) it drops the excess. Both count as `resyncs`. The learned clock ratio survives a
+  resync.
+- **Rule 5.** This is clock matching *outside the processing chain*, so it does not break
   CLAUDE.md rule 5: `core` always processes 48 kHz.
-- **Resync.** If the fill leaves [0, 4 × `TARGET_FILL`] (for example after a system stall),
-  the ring is resynced to the target: excess frames are dropped whole, or silence is
-  inserted. `status` counts every resync.
 
 ### Latency
 
-Algorithmic latency is 960 samples (20 ms). The shared-mode engine period adds about 10 ms on
-each side, and the drift target adds about 10 ms. The expected total is **35–45 ms**, which is
-over CLAUDE.md's ≤ 20 ms budget. This was accepted in exchange for processing only the game
-and keeping everything in user mode. `status` reports the measured ring fill and both
-devices' stream latencies, so the real figure is visible. Exclusive-mode render, which would
-save about 8 ms but block other apps on the device, is out of scope.
+The total is about **50–60 ms**:
+- 960 samples (20 ms) of algorithmic latency;
+- the ring target, about 21 ms with Windows' default 10 ms shared-mode periods;
+- the two devices' own engine buffers.
+
+This is over CLAUDE.md's ≤ 20 ms budget. It was accepted in exchange for processing only the
+game, all in user mode. (Planning measured, in simulation, that the ring needs two device
+periods, so the earlier 35–45 ms estimate was too low.) `status` reports the ring fill, so the
+real figure is visible. Exclusive mode and low-latency shared periods (IAudioClient3), which
+could roughly halve the ring and engine buffers, are out of scope.
 
 ## Control
 
@@ -127,8 +142,10 @@ stepwave status | on | off | toggle | mode <m> | strength <dB> | profile <id> | 
 - **`profile --auto`.** In M6a there is no game detection, so `profile --auto` keeps the current
   profile and only clears the pin. The default profile is `cs2`, or the first profile when
   `cs2.json` is absent.
-- **Transport.** The pipe is `\\.\pipe\stepwave`, created for the current user only. A second
-  `run` finds the pipe in use and exits with an error.
+- **Transport.** An `interprocess` namespaced local socket named `stepwave`, which is a named
+  pipe on Windows. A second `run` finds a live instance answering and exits with an error.
+  Read timeouts are best-effort, because Windows named pipes do not support them. Each
+  connection runs on its own thread, so a silent client cannot block other requests.
 - **Extra `status` fields** (added to `Status` as optional fields that M5 omits):
   `capture_device`, `render_device`, `ring_fill_frames`, `drift_ppm`, `resyncs`.
 - **Status rules.**
@@ -163,7 +180,7 @@ no daemon config file; `stepwave install` writes the task with the flags given t
 |---|---|
 | VB-Cable not installed or not found | `run` keeps running; `status` says `CABLE Output not found — install VB-Cable`; it retries every 2 s |
 | Model missing or corrupt | Static EQ with the reason in `status` (as in M5) |
-| Capture or render format is not 48 kHz float stereo | Shared mode converts the format where it can. If the capture rate is not 48 kHz: pass-through (no processing), with the rate in `status` |
+| Capture or render device format is not 48 kHz float stereo | The streams are opened with the Windows engine's automatic conversion, so `core` always receives 48 kHz float stereo; `graph_rate` reports the stream rate. The setup guide still recommends 48 kHz to avoid extra conversion |
 | Default render device changes, or the device is unplugged | The render stream reopens on the new default device; ring and drift controller reset |
 | Capture device disappears | Capture reopens with a 0.25 s → 5 s backoff |
 | Ring fill leaves the safe range | Resync (drop whole frames, or insert silence); `resyncs` increments |
@@ -177,21 +194,23 @@ checklist say so plainly.
 
 **Unit tests (Linux, in CI):**
 - `host` keeps every M5 test.
-- **Drift controller and resampler.** Simulate capture and render clocks at 0, +200 and
-  −200 ppm for 10 minutes of audio in fixed-size callbacks. Assert:
-  - the ring fill stays within [0, 4 × `TARGET_FILL`] after the first second, with no resyncs;
-  - the ratio converges within ±1000 ppm;
+- **Drift controller.** Simulate capture and render clocks at 0 and ±200 ppm for 10 minutes
+  of audio, including mismatched periods (144 vs 441 frames). Assert:
+  - no resyncs, and the ring never runs dry after the first 10 s;
+  - the mean correction converges to the clock difference (±20 ppm);
   - a 1 kHz sine passes through with no sample-to-sample step above its natural maximum
     plus a small margin.
-- **Resync.** A simulated 500 ms render stall causes exactly one resync and no panic.
+- **Resync.** A 500 ms render stall causes exactly one resync. A 300 ms capture stall causes
+  one re-prime, then recovery.
+- **Target.** The target adapts to the packet size.
 - **No allocation.** A counting-allocator test covers the render pull path (resampler plus
   ring), in the style of M4 and M5.
 - **Pipe protocol.** Request and response framing over an in-memory stream, reusing M5's
   cases.
 
-**CI:** a new `windows` job on `windows-latest` builds `winapp` and runs its tests, except those
-that need a real audio device. The Linux job cross-compiles `winapp` for
-`x86_64-pc-windows-gnu`.
+**CI:** a new `windows` job on `windows-latest` runs clippy and the tests of `core`, `host` and
+`winapp`, builds `stepwave.exe` in release mode and uploads it as an artifact. There is no
+Linux cross-compile. Everything except the WASAPI glue also builds and tests on Linux.
 
 **Manual checklist** (`docs/measurements/m6a-checklist.md`), filled in by the user on Windows:
 - CS2 is processed (`status` shows `running: model`) and Discord is unaffected.
