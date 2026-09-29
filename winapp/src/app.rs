@@ -54,11 +54,13 @@ fn handle(engine: &Mutex<Engine>, shared: &Shared, drift: &DriftStats, req: Requ
     let mut response = engine.handle(req, rate, &[]);
     if let Some(status) = response.status.as_mut() {
         status.io = Some(io_status(shared, drift));
-        if let Some(err) = shared.capture_error.lock().ok().and_then(|g| g.clone()) {
-            status.fallback_reason = Some(match status.fallback_reason.take() {
-                Some(r) => format!("{err}; {r}"),
-                None => err,
-            });
+        for slot in [&shared.render_error, &shared.capture_error] {
+            if let Some(err) = slot.lock().ok().and_then(|g| g.clone()) {
+                status.fallback_reason = Some(match status.fallback_reason.take() {
+                    Some(r) => format!("{err}; {r}"),
+                    None => err,
+                });
+            }
         }
     }
     response

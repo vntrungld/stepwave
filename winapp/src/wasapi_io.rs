@@ -12,6 +12,7 @@ use stepwave_host::audio::AudioCore;
 use wasapi::{BufferFlags, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 use crate::backoff;
+use crate::devices;
 use crate::drift;
 
 /// Friendly-name fragment that identifies VB-Cable's capture endpoint.
@@ -30,6 +31,9 @@ pub struct Shared {
     pub render_name: Mutex<Option<String>>,
     /// Why the capture side is not running (e.g. VB-Cable missing), for `status`.
     pub capture_error: Mutex<Option<String>>,
+    /// Why the render side is not running (e.g. the default output is CABLE Input), for
+    /// `status`.
+    pub render_error: Mutex<Option<String>>,
     /// Negotiated capture rate, 0 while closed.
     pub capture_rate: AtomicU32,
     /// Bumped by the main thread when the default render device changes.
@@ -172,7 +176,8 @@ pub fn render_thread(shared: Arc<Shared>, mut ring: drift::Render) {
         let result = render_session(&shared, &mut ring, generation);
         set(&shared.render_name, None);
         ring.reset();
-        if result.is_err() {
+        if let Err(e) = result {
+            set(&shared.render_error, Some(e.to_string()));
             std::thread::sleep(Duration::from_secs(1));
         }
     }
@@ -182,6 +187,14 @@ fn render_session(shared: &Shared, ring: &mut drift::Render, generation: u64) ->
     let enumerator = DeviceEnumerator::new()?;
     let device = enumerator.get_default_device(&Direction::Render)?;
     let name = device.get_friendlyname()?;
+    if devices::is_virtual_cable(&name) {
+        // Rendering into CABLE Input would feed our own output back into the capture side.
+        // Retry every second: a new default device bumps `render_generation` and is picked up.
+        return Err(
+            "default output is CABLE Input — set your headset/speakers as the Default Device"
+                .into(),
+        );
+    }
     let mut client = device.get_iaudioclient()?;
     let (default_period, _min) = client.get_device_period()?;
     // See `capture_session`: declare the period before `start_stream`.
@@ -210,6 +223,7 @@ fn render_session(shared: &Shared, ring: &mut drift::Render, generation: u64) ->
     )?;
     client.start_stream()?;
     set(&shared.render_name, Some(name));
+    set(&shared.render_error, None);
 
     while !shared.stop.load(Relaxed) && shared.render_generation.load(Relaxed) == generation {
         if event.wait_for_event(1000).is_err() {
