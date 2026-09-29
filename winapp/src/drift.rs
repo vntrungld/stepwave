@@ -8,9 +8,16 @@
 //! **Target fill.** Capture arrives in device-period packets and render asks for device-period
 //! buffers. Because the two clocks differ, their phases slide through each other; now and then
 //! two render periods fall between two capture packets (or the reverse). To never underrun, the
-//! ring must hold about two packets plus one chunk. The target therefore adapts to the largest
-//! packet or request seen: `2 · max(packet, request) + CHUNK`, at least `MIN_TARGET`. With
-//! 10 ms shared-mode periods that is ≈ 21 ms; with 3 ms periods ≈ 7 ms.
+//! ring must hold about two packets plus one chunk: `2 · max(capture_period, render_period) +
+//! CHUNK`, at least `MIN_TARGET`. `wasapi_io` declares both periods once per session, in frames,
+//! through `Capture::set_period` / `Render::set_period`; once both are known they alone drive
+//! the target. Until then — in tests, and before the first declared period arrives — the target
+//! falls back to the largest packet or request actually observed. The declared periods, once
+//! known, must win outright rather than blend with observed sizes: WASAPI's first render
+//! request after `start_stream` is the whole endpoint buffer, and any late wakeup asks for
+//! about two periods, so folding those observed sizes into the target would double it and leave
+//! it doubled for the rest of the session. With 10 ms shared-mode periods the target is ≈ 21 ms;
+//! with 3 ms periods ≈ 7 ms.
 //!
 //! **Priming and resync.** The render side outputs silence until the ring reaches the target,
 //! so playback starts at the target latency. If the ring runs dry (a capture stall) it primes
@@ -55,6 +62,10 @@ pub struct DriftStats {
     fill_frames: AtomicU32,
     target_frames: AtomicU32,
     max_packet: AtomicU32,
+    /// Declared capture device period, in frames. 0 = not yet declared.
+    capture_period: AtomicU32,
+    /// Declared render device period, in frames. 0 = not yet declared.
+    render_period: AtomicU32,
     ppm_bits: AtomicU64,
     resyncs: AtomicU64,
 }
@@ -105,6 +116,14 @@ impl Capture {
         }
         pushed
     }
+
+    /// Declare the capture device's period, in frames, for the render-target calculation.
+    /// `wasapi_io` calls this once per session, from the WASAPI buffer/period size. Once both
+    /// this and `Render::set_period` have been called, the declared periods alone drive the
+    /// ring target — see the module doc comment.
+    pub fn set_period(&mut self, frames: u32) {
+        self.stats.capture_period.store(frames, Relaxed);
+    }
 }
 
 /// Render end: fill output buffers at the render device's pace.
@@ -148,15 +167,29 @@ pub fn channel() -> (Capture, Render, Arc<DriftStats>) {
 }
 
 impl Render {
+    /// Declare the render device's period, in frames; see `Capture::set_period`.
+    pub fn set_period(&mut self, frames: u32) {
+        self.stats.render_period.store(frames, Relaxed);
+    }
+
     /// Fill `out` (interleaved stereo) completely. Real-time safe.
     pub fn render(&mut self, out: &mut [f32]) {
-        let request = (out.len() / CHANNELS) as u32;
-        let max_packet = self
-            .stats
-            .max_packet
-            .fetch_max(request, Relaxed)
-            .max(request);
-        let target = target_for(max_packet as usize);
+        let cap_period = self.stats.capture_period.load(Relaxed);
+        let ren_period = self.stats.render_period.load(Relaxed);
+        let target = if cap_period > 0 && ren_period > 0 {
+            // Both periods declared: they alone drive the target. Observed request sizes
+            // (e.g. the oversized first WASAPI buffer) must not be folded in — see the module
+            // doc comment.
+            target_for(cap_period.max(ren_period) as usize)
+        } else {
+            let request = (out.len() / CHANNELS) as u32;
+            let max_packet = self
+                .stats
+                .max_packet
+                .fetch_max(request, Relaxed)
+                .max(request);
+            target_for(max_packet as usize)
+        };
         if target != self.target {
             self.target = target;
             self.stats.target_frames.store(target as u32, Relaxed);
@@ -178,9 +211,12 @@ impl Render {
         self.rx.slots() / CHANNELS
     }
 
+    /// Drop `frames` whole frames from the ring in O(1). Callers only ever pass `frames <=
+    /// fill()`, so the chunk is always available; allocation-free (`f32` has no destructor to
+    /// run, so `commit_all` is just pointer arithmetic).
     fn discard(&mut self, frames: usize) {
-        for _ in 0..frames * CHANNELS {
-            let _ = self.rx.pop();
+        if let Ok(chunk) = self.rx.read_chunk(frames * CHANNELS) {
+            chunk.commit_all();
         }
     }
 
@@ -243,9 +279,15 @@ impl Render {
         }
     }
 
-    /// Start over after a device change: drop the backlog to the target, forget the learned
-    /// clock ratio (the render clock changed) and prime again.
+    /// Start over after a device change: forget any observed packet/request sizes (so the
+    /// observed-size fallback target starts over at `MIN_TARGET` rather than keeping a stale
+    /// high-water mark), drop the backlog to that target, forget the learned clock ratio (the
+    /// render clock changed) and prime again. Declared device periods (`set_period`) are left
+    /// alone — the physical device period does not change across a reset.
     pub fn reset(&mut self) {
+        self.stats.max_packet.store(0, Relaxed);
+        self.target = MIN_TARGET;
+        self.stats.target_frames.store(MIN_TARGET as u32, Relaxed);
         let fill = self.fill();
         if fill > self.target {
             self.discard(fill - self.target);
@@ -411,5 +453,60 @@ mod tests {
         let mut out = vec![1.0f32; 300 * CHANNELS];
         ren.render(&mut out);
         assert!(out.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn declared_periods_ignore_oversized_requests() {
+        let (mut cap, mut ren, stats) = channel();
+        cap.set_period(480);
+        ren.set_period(480);
+        let expected = 2 * 480 + CHUNK;
+
+        // Prime past the target before the first (whole-endpoint-buffer) render request.
+        cap.push(&vec![0.0f32; 480 * CHANNELS]);
+        cap.push(&vec![0.0f32; 480 * CHANNELS]);
+        cap.push(&vec![0.0f32; 480 * CHANNELS]);
+        let mut first = vec![0.0f32; 1056 * CHANNELS];
+        ren.render(&mut first);
+        assert_eq!(stats.target_frames() as usize, expected);
+
+        let mut out = vec![0.0f32; 480 * CHANNELS];
+        let mut oversized = vec![0.0f32; 960 * CHANNELS];
+        // Drive well over a second of audio (48 kHz / 480 frames per period).
+        for i in 0..200u32 {
+            cap.push(&vec![0.0f32; 480 * CHANNELS]);
+            if i > 0 && i % 50 == 0 {
+                // A late wakeup: capture also delivers the catch-up packet, so the ring
+                // stays balanced; the render request is what must not move the target.
+                cap.push(&vec![0.0f32; 480 * CHANNELS]);
+                ren.render(&mut oversized);
+            } else {
+                ren.render(&mut out);
+            }
+            assert_eq!(stats.target_frames() as usize, expected, "iteration {i}");
+        }
+        assert_eq!(stats.resyncs(), 0);
+    }
+
+    #[test]
+    fn reset_forgets_observed_sizes() {
+        let (mut cap, mut ren, stats) = channel();
+        let mut big_out = vec![0.0f32; 64 * CHANNELS];
+        cap.push(&vec![0.0f32; 2000 * CHANNELS]);
+        ren.render(&mut big_out);
+        assert_eq!(stats.target_frames() as usize, 2 * 2000 + CHUNK);
+
+        ren.reset();
+        assert_eq!(stats.target_frames() as usize, MIN_TARGET);
+
+        let mut out = vec![0.0f32; 64 * CHANNELS];
+        for _ in 0..5 {
+            cap.push(&vec![0.0f32; 100 * CHANNELS]);
+            ren.render(&mut out);
+        }
+        assert_eq!(
+            stats.target_frames() as usize,
+            (2 * 100 + CHUNK).max(MIN_TARGET)
+        );
     }
 }
