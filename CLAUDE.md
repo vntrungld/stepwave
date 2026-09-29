@@ -19,10 +19,10 @@ runs CachyOS/KDE (Wayland, PipeWire) and dual-boots Windows. RTX 4060 Ti 16GB fo
 ## Architecture
 
 ```
-game audio ──► host (Equalizer APO on Windows / native PipeWire node on Linux)
+game audio ──► host (VB-Cable + WASAPI app on Windows / native PipeWire node on Linux)
                  │
                  ▼
-   VST3 plugin / `stepwave` daemon ──► core DSP lib (Rust, no_std-friendly hot path)
+   `stepwave` app / daemon ──► core DSP lib (Rust, no_std-friendly hot path)
                                         ├─ STFT 20 ms window / 10 ms hop @ 48 kHz
                                         ├─ features: 32 ERB bands (log energy) + deltas, mid/side
                                         ├─ model: small GRU → per-band gain mask (0.25..4.0)
@@ -38,7 +38,8 @@ app (tray daemon) ── detects foreground game process → selects per-game mo
 | Path | Purpose |
 |---|---|
 | `core/` | Rust crate: STFT, ERB features, model inference, mask application, limiter. The only place DSP lives. |
-| `plugins/vst3/` | VST3 wrapper (use `nih-plug`) — loaded by Equalizer APO's VST host on Windows. |
+| `host/` | Platform-neutral runtime shared by the Linux daemon and the Windows app: `AudioCore` swaps, `Engine`, control protocol, profiles. |
+| `winapp/` | Windows: `stepwave.exe` — captures VB-Cable via WASAPI, runs `core`, renders to the real device with drift compensation; CLI over a named pipe (M6a). |
 | `daemon/` | Linux: `stepwave` binary — native PipeWire sink node running `core`, per-app stream routing, CLI control over a Unix socket (M5). |
 | `app/` | Tray daemon: foreground-process detection → writes active profile; Windows + Linux backends. |
 | `training/datagen/` | Python: synthetic mixture generator (see Data). |
@@ -109,10 +110,12 @@ No manual labelling. Build **synthetic mixtures with known ground truth**:
 
 ## Platform integration
 
-- **Windows:** Equalizer APO + its VST host. The tray app detects the foreground process
-  (`GetForegroundWindow` → `GetWindowThreadProcessId` → image name) and writes the active
-  profile id to a small file/shared memory the plugin polls (lock-free). APO applies per
-  device, not per app — document this; optional VB-Cable route for per-app.
+- **Windows:** `stepwave.exe` (M6a) — CS2's output device is set to VB-Cable's "CABLE Input"
+  once in the Volume mixer; the app captures "CABLE Output" via WASAPI, processes it with `core`
+  and renders to the default device, compensating the two devices' clock drift with a small
+  adaptive resampler. Only the game is processed. Total latency ≈ 35–45 ms (accepted trade-off).
+  Equalizer APO was rejected (VST2-only host, whole-device processing, code inside audiodg).
+  See `docs/superpowers/specs/2026-09-29-m6a-windows-app-design.md`. M6b adds the tray app.
 - **Linux:** the `stepwave` daemon owns a native PipeWire virtual sink that runs `core`
   directly (no LV2/filter-chain), watches the registry for streams whose
   `application.process.binary` matches a profile and routes **only that stream** into the sink
@@ -135,7 +138,8 @@ check FACEIT/tournament rules.
 - [ ] M3: train CS2 model, export, offline A/B on real recordings (measure footstep gain, false-boost rate)
 - [x] M4: real-time inference in `core`, benchmark (µs per 10 ms frame, must be < 1 ms)
 - [ ] M5: Linux `stepwave` daemon — native PipeWire sink running `core` + per-app stream routing + CLI control (Linux first — dev box)
-- [ ] M6: VST3 plugin + Equalizer APO setup guide + Windows tray app (for FACEIT CS2)
+- [ ] M6a: Windows `stepwave.exe` — VB-Cable capture → `core` → WASAPI render, drift compensation, CLI + setup guide
+- [ ] M6b: Windows tray app — foreground-game detection, per-game profiles, automatic Volume-mixer routing
 - [ ] M7: PUBG model, generic FPS model, profile UI
 
 ## Conventions
