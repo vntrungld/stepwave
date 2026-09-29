@@ -39,6 +39,15 @@ jobs:
           name: stepwave-windows
           path: target/release/stepwave.exe
 
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y nsis
+      # Compile check only: a placeholder exe and no models (models are never in CI).
+      - run: printf 'placeholder' > "$RUNNER_TEMP/stepwave.exe"
+      - run: scripts/build-windows-installer.sh --exe "$RUNNER_TEMP/stepwave.exe" --no-models
+
   python:
     runs-on: ubuntu-latest
     defaults:
