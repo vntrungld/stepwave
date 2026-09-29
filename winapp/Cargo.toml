@@ -1,0 +1,26 @@
+[package]
+name = "stepwave-winapp"
+description = "Windows stepwave app: VB-Cable capture, core processing, WASAPI render, CLI control"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "stepwave"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+interprocess = "2.4"
+rtrb = "0.4"
+rubato = "5"
+serde_json = "1"
+stepwave-core = { path = "../core" }
+stepwave-host = { path = "../host" }
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.24"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = "3"

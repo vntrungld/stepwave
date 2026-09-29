@@ -21,6 +21,24 @@ jobs:
       - run: cargo test --workspace
       - run: cargo bench --workspace --no-run
 
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Only the crates that build on Windows (the Linux daemon needs PipeWire).
+      - run: cargo clippy -p stepwave-core -p stepwave-host -p stepwave-winapp --all-targets -- -D warnings
+      - run: cargo test -p stepwave-core -p stepwave-host -p stepwave-winapp
+      - run: cargo build --release -p stepwave-winapp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stepwave-windows
+          path: target/release/stepwave.exe
+
   python:
     runs-on: ubuntu-latest
     defaults:
