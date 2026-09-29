@@ -20,8 +20,10 @@
 //! with 3 ms periods ≈ 7 ms.
 //!
 //! **Priming and resync.** The render side outputs silence until the ring reaches the target,
-//! so playback starts at the target latency. If the ring runs dry (a capture stall) it primes
-//! again; if it overfills past `RESYNC_FACTOR · target` (a render stall) it drops the excess.
+//! so playback starts at the target latency. Anything that piled up beyond that while priming
+//! (capture keeps running while a render device reopens) is dropped as priming completes, so a
+//! reopen does not add tens of seconds of extra latency. If the ring runs dry (a capture
+//! stall) it primes again; if it overfills past `RESYNC_FACTOR · target` (a render stall) it drops the excess.
 //! Both count in `resyncs`. The learned clock ratio (the integral term) survives a resync.
 //! `Render::reset` (a device change) is not a resync: it recomputes the target from the
 //! declared periods if both are known (else `MIN_TARGET`) and only trims backlog above that
@@ -201,7 +203,7 @@ impl Render {
         let mut written = 0;
         while written < out.len() {
             if self.chunk_pos == self.chunk.len() {
-                self.produce_chunk();
+                self.produce_chunk((out.len() - written) / CHANNELS);
             }
             let n = (out.len() - written).min(self.chunk.len() - self.chunk_pos);
             out[written..written + n]
@@ -224,25 +226,46 @@ impl Render {
         }
     }
 
-    fn produce_chunk(&mut self) {
+    /// How many frames to keep when priming completes with `pending` frames of the current
+    /// render request still to fill: enough that, once this request is served, the ring sits
+    /// where steady state leaves it after a render (`target − (period + CHUNK) / 2`, the level
+    /// whose chunk-boundary average is the target), and never less than the target itself.
+    fn priming_keep(&self, pending: usize) -> usize {
+        let declared = self.stats.render_period.load(Relaxed) as usize;
+        let period = if declared > 0 { declared } else { pending };
+        (self.target + pending)
+            .saturating_sub((period + CHUNK) / 2)
+            .max(self.target)
+    }
+
+    /// Produce the next chunk; `pending` is how many frames the current `render` call still
+    /// needs, this chunk included.
+    fn produce_chunk(&mut self, pending: usize) {
         self.chunk_pos = 0;
         let fill = self.fill();
-        if fill > RESYNC_FACTOR * self.target {
+        if self.priming {
+            if fill < self.target {
+                self.stats.fill_frames.store(fill as u32, Relaxed);
+                self.chunk.fill(0.0);
+                return;
+            }
+            // Priming is complete. Whatever piled up meanwhile (capture keeps running while a
+            // render device reopens) is latency, not safety margin: drop it now, before playing,
+            // rather than letting the slow controller bleed it off over tens of seconds. This is
+            // part of priming, not a resync.
+            let keep = self.priming_keep(pending);
+            if fill > keep {
+                self.discard(fill - keep);
+            }
+            self.priming = false;
+            self.fill_smooth = self.target as f64;
+        } else if fill > RESYNC_FACTOR * self.target {
             self.discard(fill - self.target);
             self.fill_smooth = self.target as f64;
             self.stats.resyncs.fetch_add(1, Relaxed);
         }
         let fill = self.fill();
         self.stats.fill_frames.store(fill as u32, Relaxed);
-
-        if self.priming {
-            if fill < self.target {
-                self.chunk.fill(0.0);
-                return;
-            }
-            self.priming = false;
-            self.fill_smooth = fill as f64;
-        }
 
         // PI control on the smoothed fill: too full → consume faster (ratio < 1).
         self.fill_smooth += (fill as f64 - self.fill_smooth) * FILL_ALPHA;
@@ -521,6 +544,70 @@ mod tests {
             stats.target_frames() as usize,
             (2 * 100 + CHUNK).max(MIN_TARGET)
         );
+    }
+
+    /// Steady state with 480-frame periods, then a device reopen: `reset()`, capture keeps
+    /// pushing for `gap_packets` 10 ms packets while the render device opens, then WASAPI's
+    /// first request is the whole endpoint buffer (1056 frames), followed by normal periods.
+    /// Returns the stats, the ring fill after each post-gap render, and the post-gap output.
+    fn reopen_after_gap(gap_packets: usize) -> (Arc<DriftStats>, Vec<usize>, Vec<f32>) {
+        let (mut cap, mut ren, stats) = channel();
+        cap.set_period(480);
+        ren.set_period(480);
+        let packet = vec![0.3f32; 480 * CHANNELS];
+        let mut out = vec![0.0f32; 480 * CHANNELS];
+        for _ in 0..200 {
+            cap.push(&packet);
+            ren.render(&mut out);
+        }
+        assert_eq!(stats.resyncs(), 0, "test setup: steady state resynced");
+
+        ren.reset();
+        for _ in 0..gap_packets {
+            cap.push(&packet);
+        }
+        let (mut fills, mut played) = (Vec::new(), Vec::new());
+        let mut first = vec![0.0f32; 1056 * CHANNELS];
+        ren.render(&mut first);
+        fills.push(ren.fill());
+        played.extend_from_slice(&first);
+        for _ in 0..20 {
+            cap.push(&packet);
+            ren.render(&mut out);
+            fills.push(ren.fill());
+            played.extend_from_slice(&out);
+        }
+        (stats, fills, played)
+    }
+
+    #[test]
+    fn reopen_after_a_gap_lands_near_the_target() {
+        // 50 ms and 70 ms of capture while the render device reopens; 70 ms overfills past
+        // RESYNC_FACTOR · target, which the trim at the end of priming must absorb silently.
+        for gap_ms in [50, 70] {
+            let (stats, fills, played) = reopen_after_gap(gap_ms / 10);
+            let target = stats.target_frames() as usize;
+            assert_eq!(target, 2 * 480 + CHUNK);
+            assert_eq!(stats.resyncs(), 0, "{gap_ms} ms: resynced");
+            for (i, &f) in fills.iter().enumerate() {
+                assert!(
+                    f.abs_diff(target) <= 480,
+                    "{gap_ms} ms: fill {f} after render {i}, target {target}"
+                );
+            }
+            let start = played
+                .iter()
+                .position(|&v| v != 0.0)
+                .unwrap_or(played.len());
+            assert!(
+                start < 1056 * CHANNELS,
+                "{gap_ms} ms: never started playing"
+            );
+            assert!(
+                played[start..].iter().all(|&v| v != 0.0),
+                "{gap_ms} ms: silent output after priming completed"
+            );
+        }
     }
 
     #[test]

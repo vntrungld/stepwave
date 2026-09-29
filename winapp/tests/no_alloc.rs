@@ -75,6 +75,7 @@ fn discard_and_reset_do_not_allocate() {
         ren.render(&mut out);
     }
     let target = stats.target_frames() as usize;
+    let mut first = vec![0.0f32; 1056 * CHANNELS];
 
     let before = counts();
 
@@ -92,6 +93,14 @@ fn discard_and_reset_do_not_allocate() {
     // ring is still above the (unchanged) target.
     ren.reset();
     ren.render(&mut out);
+
+    // Priming trim: a device reopen with capture still running (70 ms of packets), then
+    // WASAPI's whole-endpoint-buffer first request.
+    ren.reset();
+    for _ in 0..7 {
+        cap.push(&packet);
+    }
+    ren.render(&mut first);
 
     let after = counts();
     assert_eq!(after.0 - before.0, 0, "discard/reset path allocated");

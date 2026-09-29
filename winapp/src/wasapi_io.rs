@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use stepwave_host::audio::AudioCore;
-use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
+use wasapi::{BufferFlags, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 use crate::backoff;
 use crate::drift;
@@ -196,6 +196,18 @@ fn render_session(shared: &Shared, ring: &mut drift::Render, generation: u64) ->
     let frames = client.get_buffer_size()? as usize;
     let mut samples = vec![0f32; frames * CHANNELS];
     let mut bytes = vec![0u8; frames * BYTES_PER_FRAME];
+    // Pre-fill the endpoint buffer with silence before starting, so the first event asks for
+    // about one period instead of the whole buffer; together with the trim when priming
+    // completes (see `drift`) this keeps the ring at its target after a (re)open.
+    let prefill = (client.get_available_space_in_frames()? as usize).min(frames);
+    render.write_to_device(
+        prefill,
+        &bytes[..prefill * BYTES_PER_FRAME],
+        Some(BufferFlags {
+            silent: true,
+            ..BufferFlags::none()
+        }),
+    )?;
     client.start_stream()?;
     set(&shared.render_name, Some(name));
 
