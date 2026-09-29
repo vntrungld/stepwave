@@ -178,13 +178,13 @@ no daemon config file; `stepwave install` writes the task with the flags given t
 
 | Situation | Behaviour |
 |---|---|
-| VB-Cable not installed or not found | `run` keeps running; `status` says `CABLE Output not found — install VB-Cable`; it retries every 2 s |
+| VB-Cable not installed or not found | `run` keeps running; `status` says `CABLE Output not found — install VB-Cable`; it retries with a 0.25 s → 5 s backoff |
 | Model missing or corrupt | Static EQ with the reason in `status` (as in M5) |
 | Capture or render device format is not 48 kHz float stereo | The streams are opened with the Windows engine's automatic conversion, so `core` always receives 48 kHz float stereo; `graph_rate` reports the stream rate. The setup guide still recommends 48 kHz to avoid extra conversion |
 | Default render device changes, or the device is unplugged | The render stream reopens on the new default device; ring and drift controller reset |
 | Capture device disappears | Capture reopens with a 0.25 s → 5 s backoff |
 | Ring fill leaves the safe range | Resync (drop whole frames, or insert silence); `resyncs` increments |
-| `stepwave run` exits or crashes | **CS2 goes silent** because its output is pinned to VB-Cable. The logon task restarts it on failure (up to 3 times a minute), and the setup guide gives the Volume-mixer recovery step |
+| `stepwave run` exits or crashes | **CS2 goes silent** because its output is pinned to VB-Cable. `stepwave run` supervises itself and restarts the app (up to 3 times a minute); the setup guide gives the Volume-mixer recovery step |
 | Second `run` | The pipe is in use: error and exit |
 
 Unlike Linux, stopping the app does **not** return the game to the speakers. The guide and the
