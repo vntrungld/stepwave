@@ -22,3 +22,6 @@ FACEIT confirms. Tick each item and note anything odd.
 | 15 | Sleep/resume | Sleep the PC with stepwave running, wake it; within ~3 s `stepwave status` shows both devices open and audio works | |
 | 16 | Slip crossfade | During long footstep-heavy play listen for any periodic tick/flutter (drift corrections) | |
 | 17 | Measured latency | Record mic + game output with a loopback recorder (e.g. play a click in CS2 console vs. headset output) and note the measured delay | |
+| 18 | Installer: fresh install | Run `stepwave-setup-*.exe` as a normal user on a PC without stepwave: no admin prompt, Start-menu shortcuts appear, `stepwave status` answers, Ctrl+Alt+S toggles | |
+| 19 | Installer: upgrade | Run a newer installer while stepwave is running: it stops the old one, replaces files, starts again; profiles/models present | |
+| 20 | Installer: uninstall | Apps & features → stepwave → Uninstall: process stopped, logon task gone (`schtasks /Query /TN stepwave` fails), shortcuts and `%LOCALAPPDATA%\stepwave` removed | |

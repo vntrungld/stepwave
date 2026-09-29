@@ -7,6 +7,23 @@ headset or speakers. Discord, browsers and everything else go straight to your d
 > **FACEIT:** do not use stepwave in FACEIT matches until FACEIT Support has confirmed in
 > writing that it is allowed. Use it in Premier/Competitive (VAC) first.
 
+## Easiest: the installer
+
+Build it on the dev machine (it bundles `stepwave.exe` from CI, the profiles and your local
+trained models — keep the result private, never publish it):
+
+```sh
+scripts/build-windows-installer.sh            # → dist/stepwave-setup-<version>-<sha>.exe
+```
+
+Copy that file to Windows and run it (no admin needed). It checks for VB-Cable, installs to
+`%LOCALAPPDATA%\stepwave`, registers the logon task, starts stepwave, and adds Start-menu
+shortcuts: **stepwave toggle** (Ctrl+Alt+S), **stepwave status**, the setup guide and
+**Uninstall stepwave**. Running a newer installer upgrades in place. Then do only steps 1, 2
+and 4 below (VB-Cable, formats, CS2 → CABLE Input); step 3 and 5 are done for you.
+
+The manual steps below are the same thing by hand.
+
 ## 1. Install VB-Cable
 
 Download "VB-CABLE Driver" from vb-audio.com, run `VBCABLE_Setup_x64.exe` as administrator,
