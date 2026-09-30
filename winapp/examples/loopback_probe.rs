@@ -122,11 +122,11 @@ mod win {
                     }
                     let mut ss = 0.0f32;
                     let mut pk = 0.0f32;
-                    for b in bytes[..read * CH * 4].chunks_exact(4) {
+                    for b in bytes[..read * CH * 4].as_chunks::<4>().0 {
                         let s = if info.flags.silent {
                             0.0
                         } else {
-                            f32::from_le_bytes([b[0], b[1], b[2], b[3]])
+                            f32::from_le_bytes(*b)
                         };
                         ss += s * s;
                         pk = pk.max(s.abs());
@@ -171,8 +171,8 @@ mod win {
                         let _ = rx.pop();
                     }
                     let space = (client.get_available_space_in_frames()? as usize).min(frames);
-                    for b in bytes[..space * CH * 4].chunks_exact_mut(4) {
-                        b.copy_from_slice(&rx.pop().unwrap_or(0.0).to_le_bytes());
+                    for b in bytes[..space * CH * 4].as_chunks_mut::<4>().0 {
+                        *b = rx.pop().unwrap_or(0.0).to_le_bytes();
                     }
                     render.write_to_device(space, &bytes[..space * CH * 4], None)?;
                 }
