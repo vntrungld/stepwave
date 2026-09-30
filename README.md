@@ -10,7 +10,9 @@ access, no injection.
 
 **Status:** planning / scaffolding. See [CLAUDE.md](CLAUDE.md) for architecture and roadmap.
 
-> Game sound assets used for training are never included in this repository.
+> Game sound assets used for training are never included in this repository. The trained
+> CS2 model is published as a release asset; see [docs/models.md](docs/models.md) for its
+> provenance.
 
 ## Offline CLI (M1)
 
@@ -34,9 +36,9 @@ falls back to the device by itself.
 cargo install --path daemon
 mkdir -p ~/.config/stepwave/profiles ~/.config/stepwave/models ~/.config/systemd/user
 cp profiles/*.json ~/.config/stepwave/profiles/
-# Copy your trained models if you have them (models/*.swm is not in git); without a
-# model the daemon uses the profile's static EQ:
-#   cp models/*.swm ~/.config/stepwave/models/
+# Download the model (see docs/models.md) or copy your own; without a model the
+# daemon uses the profile's static EQ:
+gh release download model-cs2-003 -R vntrungld/stepwave -p cs2.swm -D ~/.config/stepwave/models
 cp daemon/stepwave.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now stepwave
 

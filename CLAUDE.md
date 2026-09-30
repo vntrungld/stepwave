@@ -71,6 +71,8 @@ No manual labelling. Build **synthetic mixtures with known ground truth**:
 - Sources per game: footsteps (by surface), own/enemy gunfire, grenades/explosions, ambience,
   voice lines, UI. For CS2, extract sound assets with Source 2 Viewer from the VPKs.
   **Game assets are for private training only — never commit them or redistribute.**
+  Trained models are published only as GitHub Release assets with their provenance
+  stated (`docs/models.md`); never commit `.swm` files.
   `training/data/` is git-ignored.
 - Mixer randomises: SNR (footsteps −30..0 dB rel. mix), count/timing, HRTF/pan position,
   distance (level + LPF), room reverb (RIRs), game-like compression.
