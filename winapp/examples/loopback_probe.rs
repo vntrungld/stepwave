@@ -26,7 +26,7 @@ mod win {
     use std::time::{Duration, Instant};
     use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
-    type Res<T> = Result<T, Box<dyn std::error::Error>>;
+    type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
     const CH: usize = 2;
 
     fn format() -> WaveFormat {
