@@ -18,3 +18,7 @@ models/*.swm
 .DS_Store
 .idea/
 .vscode/
+
+# Windows installer build output (contains local models; never commit)
+/build/
+/dist/

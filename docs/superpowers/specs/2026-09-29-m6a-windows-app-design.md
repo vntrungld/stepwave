@@ -20,7 +20,7 @@ and setting CS2's output device automatically.
 |---|---|---|
 | Hosting | Standalone app, VB-Cable in, WASAPI out | Processes only the game (like M5), is an ordinary user-mode program, reuses M5 code, and does not depend on Equalizer APO |
 | Control | CLI `stepwave.exe status/on/off/toggle/mode/strength/profile/reload`, bound to a hotkey by the user | Same UX as M5; the base for the M6b tray app |
-| Latency | About 50–60 ms total accepted (revised from 35–45 ms during planning; see "Latency") | Only the game is processed, all in user mode |
+| Latency | Estimated ~50–80 ms total accepted (revised from 35–45 ms during planning; see "Latency"); to be measured | Only the game is processed, all in user mode |
 | Game selection | The user sets CS2's output to "CABLE Input" once in Windows' Volume mixer | Windows remembers it; automating this is M6b |
 | Profile | Fixed, default `cs2`, changed with `stepwave profile` | Foreground-game switching is M6b |
 
@@ -118,7 +118,8 @@ VB-Cable and the real device run on independent clocks, which typically differ b
 
 ### Latency
 
-The total is about **50–60 ms**:
+The total is estimated at **~50–80 ms** (processing 20 ms + ring ~20 ms + capture/render
+engine buffers); measure it with the M6a checklist (`docs/measurements/m6a-checklist.md`):
 - 960 samples (20 ms) of algorithmic latency;
 - the ring target, about 21 ms with Windows' default 10 ms shared-mode periods;
 - the two devices' own engine buffers.
@@ -178,13 +179,13 @@ no daemon config file; `stepwave install` writes the task with the flags given t
 
 | Situation | Behaviour |
 |---|---|
-| VB-Cable not installed or not found | `run` keeps running; `status` says `CABLE Output not found — install VB-Cable`; it retries every 2 s |
+| VB-Cable not installed or not found | `run` keeps running; `status` says `CABLE Output not found — install VB-Cable`; it retries with a 0.25 s → 5 s backoff |
 | Model missing or corrupt | Static EQ with the reason in `status` (as in M5) |
 | Capture or render device format is not 48 kHz float stereo | The streams are opened with the Windows engine's automatic conversion, so `core` always receives 48 kHz float stereo; `graph_rate` reports the stream rate. The setup guide still recommends 48 kHz to avoid extra conversion |
 | Default render device changes, or the device is unplugged | The render stream reopens on the new default device; ring and drift controller reset |
 | Capture device disappears | Capture reopens with a 0.25 s → 5 s backoff |
 | Ring fill leaves the safe range | Resync (drop whole frames, or insert silence); `resyncs` increments |
-| `stepwave run` exits or crashes | **CS2 goes silent** because its output is pinned to VB-Cable. The logon task restarts it on failure (up to 3 times a minute), and the setup guide gives the Volume-mixer recovery step |
+| `stepwave run` exits or crashes | **CS2 goes silent** because its output is pinned to VB-Cable. `stepwave run` supervises itself and restarts the app (up to 3 times a minute); the setup guide gives the Volume-mixer recovery step |
 | Second `run` | The pipe is in use: error and exit |
 
 Unlike Linux, stopping the app does **not** return the game to the speakers. The guide and the

@@ -8,7 +8,7 @@ use std::cell::Cell;
 
 use stepwave_core::stft::SAMPLE_RATE;
 use stepwave_core::{Processor, Profile};
-use stepwave_daemon::audio::{channel, WARMUP, XFADE};
+use stepwave_host::audio::{channel, WARMUP, XFADE};
 
 thread_local! {
     static ALLOCS: Cell<usize> = const { Cell::new(0) };

@@ -167,7 +167,17 @@ impl Engine {
                     binary: binary.clone(),
                 })
                 .collect(),
+            io: None,
         }
+    }
+
+    /// The profile to start with when nothing selects one: `preferred` if loaded, else the
+    /// first loaded profile id in sorted order.
+    pub fn default_profile(&self, preferred: &str) -> Option<String> {
+        if self.profiles.get(preferred).is_some() {
+            return Some(preferred.to_string());
+        }
+        self.profiles.ids().into_iter().next()
     }
 
     fn active_profile(&self) -> Option<String> {
@@ -248,6 +258,14 @@ mod tests {
         let r = e.handle(req, 48_000, &[]);
         assert!(r.ok, "{:?}", r.error);
         r.status.unwrap()
+    }
+
+    #[test]
+    fn default_profile_prefers_the_named_one_then_the_first() {
+        let (d, e, _c) = setup(true);
+        assert_eq!(e.default_profile("cs2").as_deref(), Some("cs2"));
+        assert_eq!(e.default_profile("pubg").as_deref(), Some("cs2"));
+        drop(d);
     }
 
     #[test]

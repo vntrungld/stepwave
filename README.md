@@ -4,8 +4,8 @@ Per-game AI audio enhancer for competitive FPS games — a software take on "foo
 boost" sound cards like the Fosi Audio C3 StepSense.
 
 A tiny real-time neural net recognises footsteps in game audio and boosts only them
-(while taming gunfire/explosions), preserving the stereo image. Runs as a VST3 plugin
-in Equalizer APO (Windows) or a native PipeWire daemon (Linux) — no game memory
+(while taming gunfire/explosions), preserving the stereo image. Runs as a standalone app
+with VB-Cable (Windows) or a native PipeWire daemon (Linux) — no game memory
 access, no injection.
 
 **Status:** planning / scaffolding. See [CLAUDE.md](CLAUDE.md) for architecture and roadmap.
@@ -47,6 +47,13 @@ stepwave strength 7             # dB, until reload/restart
 stepwave profile cs2            # pin a profile (e.g. to test with a video); --auto to unpin
 stepwave reload                 # re-read profiles and models
 ```
+
+## Windows app (M6a)
+
+On Windows, CS2 plays into the free VB-Cable virtual device and `stepwave.exe` captures it,
+enhances it and plays it on your real device — only the game is processed. Same commands as the
+Linux daemon (`stepwave status | toggle | mode | strength | profile | reload`), plus
+`stepwave run` and `stepwave install` (start at logon). Setup: [docs/windows-setup.md](docs/windows-setup.md).
 
 ## Training data (M2)
 

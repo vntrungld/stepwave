@@ -88,6 +88,71 @@ pub struct Status {
     /// from other graph rates), 0 until negotiated.
     pub graph_rate: u32,
     pub routed_streams: Vec<RoutedStream>,
+    /// Audio device details; only the Windows app reports these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub io: Option<IoStatus>,
+}
+
+/// Windows-app device state: which endpoints are open and how the drift compensation is doing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IoStatus {
+    /// Capture endpoint (VB-Cable's "CABLE Output"), or None while it is missing.
+    pub capture_device: Option<String>,
+    /// Render endpoint (the current default output), or None while it is missing.
+    pub render_device: Option<String>,
+    /// Frames waiting between capture and render.
+    pub ring_fill_frames: u32,
+    /// Current drift correction applied on the render side, in ppm.
+    pub drift_ppm: f64,
+    /// Times the ring was resynced after leaving its safe range.
+    pub resyncs: u64,
+}
+
+impl Status {
+    /// Human-readable multi-line form printed by the CLIs.
+    pub fn to_text(&self) -> String {
+        let mut out = format!(
+            "enabled:    {}\nprofile:    {}{}\nmode:       {} (running: {})\nstrength:   {}\n",
+            if self.enabled { "on" } else { "off (bypass)" },
+            self.profile.as_deref().unwrap_or("-"),
+            if self.profile_pinned { " (pinned)" } else { "" },
+            self.mode.as_str(),
+            self.processing,
+            self.strength_db
+                .map_or("-".to_string(), |v| format!("{v:.1} dB")),
+        );
+        if let Some(reason) = &self.fallback_reason {
+            out.push_str(&format!("note:       {reason}\n"));
+        }
+        out.push_str(&format!(
+            "rate:       {}\n",
+            if self.graph_rate == 0 {
+                "not negotiated yet (no audio)".to_string()
+            } else {
+                format!("{} Hz", self.graph_rate)
+            }
+        ));
+        match &self.io {
+            Some(io) => {
+                let dev = |d: &Option<String>| d.clone().unwrap_or_else(|| "(not open)".into());
+                out.push_str(&format!(
+                    "capture:    {}\nrender:     {}\nbuffer:     {} frames, drift {:+.1} ppm, resyncs {}\n",
+                    dev(&io.capture_device),
+                    dev(&io.render_device),
+                    io.ring_fill_frames,
+                    io.drift_ppm,
+                    io.resyncs,
+                ));
+            }
+            None if self.routed_streams.is_empty() => out.push_str("routed:     none\n"),
+            None => {
+                for r in &self.routed_streams {
+                    out.push_str(&format!("routed:     {} (node {})\n", r.binary, r.id));
+                }
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +237,53 @@ mod tests {
         ] {
             assert!(Request::parse(line).is_err(), "{line}");
         }
+    }
+
+    fn sample_status() -> Status {
+        Status {
+            enabled: true,
+            mode: ModeArg::Auto,
+            strength_db: Some(7.0),
+            profile: Some("cs2".into()),
+            profile_pinned: false,
+            processing: "model".into(),
+            fallback_reason: None,
+            graph_rate: 48_000,
+            routed_streams: vec![RoutedStream {
+                id: 7,
+                binary: "cs2".into(),
+            }],
+            io: None,
+        }
+    }
+
+    #[test]
+    fn text_form_shows_routing_on_linux_and_devices_on_windows() {
+        let linux = sample_status().to_text();
+        assert!(linux.contains("routed:     cs2 (node 7)"), "{linux}");
+        let mut win = sample_status();
+        win.routed_streams.clear();
+        win.io = Some(IoStatus {
+            capture_device: Some("CABLE Output (VB-Audio Virtual Cable)".into()),
+            render_device: None,
+            ring_fill_frames: 1024,
+            drift_ppm: -12.5,
+            resyncs: 0,
+        });
+        let text = win.to_text();
+        assert!(text.contains("capture:    CABLE Output"), "{text}");
+        assert!(text.contains("render:     (not open)"), "{text}");
+        assert!(
+            text.contains("buffer:     1024 frames, drift -12.5 ppm, resyncs 0"),
+            "{text}"
+        );
+        assert!(!text.contains("routed:"), "{text}");
+    }
+
+    #[test]
+    fn io_is_omitted_from_json_when_absent() {
+        let json = serde_json::to_string(&sample_status()).unwrap();
+        assert!(!json.contains("\"io\""), "{json}");
     }
 
     #[test]

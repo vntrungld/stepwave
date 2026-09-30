@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use stepwave_daemon::control;
 use stepwave_daemon::daemon::{self, Options};
-use stepwave_daemon::protocol::{ModeArg, Request, Response, Status};
+use stepwave_daemon::protocol::{ModeArg, Request, Response};
 
 #[derive(Parser)]
 #[command(
@@ -143,43 +143,11 @@ fn print_response(resp: &Response, json: bool) -> ExitCode {
     } else if let Some(err) = &resp.error {
         eprintln!("stepwave: {err}");
     } else if let Some(status) = &resp.status {
-        print!("{}", format_status(status));
+        print!("{}", status.to_text());
     }
     if resp.ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
-}
-
-fn format_status(s: &Status) -> String {
-    let mut out = format!(
-        "enabled:    {}\nprofile:    {}{}\nmode:       {} (running: {})\nstrength:   {}\n",
-        if s.enabled { "on" } else { "off (bypass)" },
-        s.profile.as_deref().unwrap_or("-"),
-        if s.profile_pinned { " (pinned)" } else { "" },
-        s.mode.as_str(),
-        s.processing,
-        s.strength_db
-            .map_or("-".to_string(), |v| format!("{v:.1} dB")),
-    );
-    if let Some(reason) = &s.fallback_reason {
-        out.push_str(&format!("note:       {reason}\n"));
-    }
-    out.push_str(&format!(
-        "rate:       {}\n",
-        if s.graph_rate == 0 {
-            "not negotiated yet (no audio)".to_string()
-        } else {
-            format!("{} Hz", s.graph_rate)
-        }
-    ));
-    if s.routed_streams.is_empty() {
-        out.push_str("routed:     none\n");
-    } else {
-        for r in &s.routed_streams {
-            out.push_str(&format!("routed:     {} (node {})\n", r.binary, r.id));
-        }
-    }
-    out
 }

@@ -135,6 +135,7 @@ mod tests {
             fallback_reason: None,
             graph_rate: 48_000,
             routed_streams: vec![],
+            io: None,
         }
     }
 

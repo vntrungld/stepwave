@@ -63,6 +63,11 @@ impl ProfileSet {
         self.by_id.is_empty()
     }
 
+    /// Loaded profile ids, sorted.
+    pub fn ids(&self) -> Vec<String> {
+        self.by_id.keys().cloned().collect()
+    }
+
     /// Process binary name -> profile id, from every profile's `match.linux`.
     pub fn matches(&self) -> HashMap<String, String> {
         let mut m = HashMap::new();
