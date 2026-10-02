@@ -33,17 +33,32 @@ mod win {
         WaveFormat::new(32, 32, &SampleType::Float, 48000, CH, None)
     }
 
+    /// The root of the process tree for `name` (a `name` process whose parent is not also
+    /// `name`). Browsers run many processes; capturing a child's tree gets nothing.
     fn find_pid(name: &str) -> Res<u32> {
-        let out = std::process::Command::new("tasklist")
-            .args(["/FO", "CSV", "/NH", "/FI", &format!("IMAGENAME eq {name}")])
+        let script = format!(
+            "Get-CimInstance Win32_Process -Filter \"Name='{name}'\" | ForEach-Object {{ \"$($_.ProcessId) $($_.ParentProcessId)\" }}"
+        );
+        let out = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()?;
         let text = String::from_utf8_lossy(&out.stdout);
-        let mut pids: Vec<u32> = text
+        let procs: Vec<(u32, u32)> = text
             .lines()
-            .filter_map(|l| l.split("\",\"").nth(1)?.parse().ok())
+            .filter_map(|l| {
+                let mut it = l.split_whitespace();
+                Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+            })
             .collect();
-        pids.sort();
-        pids.first()
+        println!("{name} processes (pid parent): {procs:?}");
+        let roots: Vec<u32> = procs
+            .iter()
+            .filter(|(_, parent)| !procs.iter().any(|(pid, _)| pid == parent))
+            .map(|(pid, _)| *pid)
+            .collect();
+        println!("roots: {roots:?}");
+        roots
+            .first()
             .copied()
             .ok_or_else(|| format!("{name} is not running").into())
     }
@@ -75,7 +90,14 @@ mod win {
             .find(|a| a.to_lowercase().ends_with(".exe"))
             .cloned()
             .unwrap_or_else(|| "cs2.exe".into());
-        let pid = find_pid(&name)?;
+        let pid = match args
+            .iter()
+            .position(|a| a == "--pid")
+            .and_then(|i| args.get(i + 1)?.parse().ok())
+        {
+            Some(pid) => pid,
+            None => find_pid(&name)?,
+        };
         println!("capturing {name} (pid {pid}) for {seconds} s, play={play}");
         println!("try: mute {name} in the Volume mixer, or move it to another output device");
 
