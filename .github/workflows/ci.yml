@@ -38,6 +38,12 @@ jobs:
         with:
           name: stepwave-windows
           path: target/release/stepwave.exe
+      # SPIKE: process-loopback probe (throwaway branch only).
+      - run: cargo build --release -p stepwave-winapp --example loopback_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopback-probe
+          path: target/release/examples/loopback_probe.exe
 
   installer:
     runs-on: ubuntu-latest
