@@ -6,6 +6,8 @@
 //! default output device, so you can hear whether the capture still works after muting the
 //! app in the Volume mixer or moving it to another output device.
 
+#![allow(deprecated)] // fetch_update vs try_update differs across toolchains
+
 #[cfg(not(windows))]
 fn main() {
     eprintln!("Windows only");
