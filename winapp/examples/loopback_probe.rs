@@ -1,7 +1,9 @@
 //! SPIKE (throwaway): can stepwave capture one process's audio with WASAPI process loopback
 //! while the user does not hear the original?
 //!
-//! Usage: loopback_probe [process.exe] [--play] [--seconds N]
+//! Usage: loopback_probe [process.exe] [--pid N] [--play] [--seconds N] [--duck LEVEL]
+//! --duck LEVEL sets the app's session volume to LEVEL (e.g. 0.001) and multiplies the capture
+//! by 1/LEVEL, so the original is nearly inaudible while the captured copy is full scale.
 //! Prints the captured level every 0.5 s. With --play, also renders the captured audio to the
 //! default output device, so you can hear whether the capture still works after muting the
 //! app in the Volume mixer or moving it to another output device.
@@ -37,7 +39,7 @@ mod win {
 
     /// The root of the process tree for `name` (a `name` process whose parent is not also
     /// `name`). Browsers run many processes; capturing a child's tree gets nothing.
-    fn find_pid(name: &str) -> Res<u32> {
+    fn find_pid(name: &str) -> Res<(u32, Vec<u32>)> {
         let script = format!(
             "Get-CimInstance Win32_Process -Filter \"Name='{name}'\" | ForEach-Object {{ \"$($_.ProcessId) $($_.ParentProcessId)\" }}"
         );
@@ -59,10 +61,38 @@ mod win {
             .map(|(pid, _)| *pid)
             .collect();
         println!("roots: {roots:?}");
-        roots
+        let root = roots
             .first()
             .copied()
-            .ok_or_else(|| format!("{name} is not running").into())
+            .ok_or_else(|| format!("{name} is not running"))?;
+        Ok((root, procs.iter().map(|(pid, _)| *pid).collect()))
+    }
+
+    /// Set the volume of every audio session (default render device) owned by `pids`.
+    fn set_session_volume(pids: &[u32], level: f32) -> Res<usize> {
+        use windows::core::Interface;
+        use windows::Win32::Media::Audio::{
+            eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
+            ISimpleAudioVolume, MMDeviceEnumerator,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+        unsafe {
+            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole)?;
+            let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None)?;
+            let list = mgr.GetSessionEnumerator()?;
+            let mut hit = 0;
+            for i in 0..list.GetCount()? {
+                let control = list.GetSession(i)?;
+                let control2: IAudioSessionControl2 = control.cast()?;
+                if pids.contains(&control2.GetProcessId().unwrap_or(0)) {
+                    let volume: ISimpleAudioVolume = control.cast()?;
+                    volume.SetMasterVolume(level, std::ptr::null())?;
+                    hit += 1;
+                }
+            }
+            Ok(hit)
+        }
     }
 
     struct Stats {
@@ -92,13 +122,29 @@ mod win {
             .find(|a| a.to_lowercase().ends_with(".exe"))
             .cloned()
             .unwrap_or_else(|| "cs2.exe".into());
-        let pid = match args
+        let (pid, all_pids) = match args
             .iter()
             .position(|a| a == "--pid")
             .and_then(|i| args.get(i + 1)?.parse().ok())
         {
-            Some(pid) => pid,
+            Some(pid) => (pid, vec![pid]),
             None => find_pid(&name)?,
+        };
+        let duck: Option<f32> = args
+            .iter()
+            .position(|a| a == "--duck")
+            .and_then(|i| args.get(i + 1)?.parse().ok());
+        wasapi::initialize_mta().ok()?;
+        let gain = match duck {
+            Some(level) => {
+                let n = set_session_volume(&all_pids, level)?;
+                println!(
+                    "set {n} audio session(s) of {name} to volume {level}; capture gain x{}",
+                    1.0 / level
+                );
+                1.0 / level
+            }
+            None => 1.0,
         };
         println!("capturing {name} (pid {pid}) for {seconds} s, play={play}");
         println!("try: mute {name} in the Volume mixer, or move it to another output device");
@@ -150,7 +196,7 @@ mod win {
                         let s = if info.flags.silent {
                             0.0
                         } else {
-                            f32::from_le_bytes(*b)
+                            f32::from_le_bytes(*b) * gain
                         };
                         ss += s * s;
                         pk = pk.max(s.abs());
@@ -230,6 +276,10 @@ mod win {
             }
         }
         stop.store(true, Relaxed);
+        if duck.is_some() {
+            let _ = set_session_volume(&all_pids, 1.0);
+            println!("restored {name} volume to 1.0");
+        }
         cap.join().map_err(|_| "capture thread panicked")??;
         if let Some(r) = ren {
             r.join().map_err(|_| "render thread panicked")??;
